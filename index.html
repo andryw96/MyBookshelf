@@ -930,7 +930,7 @@ let googleBooksLimited=false;
 async function lookupBook(value, isIsbn){
   try{
     const q = isIsbn? 'isbn:'+value.replace(/[^0-9Xx]/g,'') : value;
-    const keyParam = GOOGLE_BOOKS_KEY? '&key='+GOOGLE_BOOKS_KEY : '';
+    const keyParam = GOOGLE_BOOKS_KEY? '&key='+GOOGLE_BOOKS_KEY : 'AIzaSyDB-BZbgr00bNkH_Gd_zBWov4yOypmQ6iQ';
     const r = await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults=1'+keyParam);
     if(r.status===429){ googleBooksLimited=true; }
     const d = await r.json();
