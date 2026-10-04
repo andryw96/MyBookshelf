@@ -859,57 +859,109 @@ function onCoverSelected(ev){
 }
 
 function toggleScan(){ if(scanning){ stopScan(); } else { scanTarget=null; startScan(); } }
-function startScan(){
-  if(typeof Quagga==='undefined'){ setStatus('Libreria di scansione non disponibile su questo browser.'); return; }
+
+// Scansione codici a barre: lettore nativo del browser (BarcodeDetector, Chrome/Android) con Quagga come riserva (iPhone/Safari)
+let scanMode=null, scanStream=null, scanTimer=null, scanBusy=false, recentCodes=[];
+function isValidBarcode(code){
+  if(!/^\d+$/.test(code) || ![8,12,13].includes(code.length)) return false;
+  const d=code.split('').map(Number), check=d.pop();
+  let sum=0;
+  for(let i=d.length-1,w=3;i>=0;i--,w=(w===3?1:3)) sum+=d[i]*w;
+  return (10-(sum%10))%10===check;
+}
+function applyBestFocus(track){
+  try{
+    const caps=track && track.getCapabilities && track.getCapabilities();
+    if(caps && caps.focusMode){
+      const mode=caps.focusMode.includes('continuous')?'continuous':caps.focusMode.includes('single-shot')?'single-shot':null;
+      if(mode) track.applyConstraints({advanced:[{focusMode:mode}]}).catch(()=>{});
+    }
+  }catch(e){}
+}
+function cameraDeniedMsg(){
+  setStatus('⚠️ Fotocamera non accessibile. Controlla il permesso "Fotocamera" per questa pagina nelle impostazioni del browser, oppure inserisci i dati a mano.');
+}
+async function startScan(){
   document.getElementById('scanBox').style.display='block';
   document.getElementById('scanHint').style.display='block';
   document.getElementById('scanBtn').textContent='⏹️ Ferma scansione';
   setStatus('🔎 Richiesta accesso alla fotocamera...');
+  scanning=true; recentCodes=[];
+  let res=false;
+  if('BarcodeDetector' in window){ try{ res=await startNativeScan(); }catch(e){ res=false; } }
+  if(!scanning) return;
+  if(res==='denied'){ stopScan(); cameraDeniedMsg(); return; }
+  if(!res) startQuaggaScan();
+}
+async function startNativeScan(){
+  let formats=[];
+  try{
+    const sup=await BarcodeDetector.getSupportedFormats();
+    formats=['ean_13','ean_8','upc_a','upc_e'].filter(f=>sup.includes(f));
+  }catch(e){}
+  if(!formats.length) return false;
+  let stream;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
+  }catch(e){ return (e && (e.name==='NotAllowedError'||e.name==='SecurityError'))? 'denied' : false; }
+  if(!scanning){ stream.getTracks().forEach(t=>t.stop()); return true; }
+  scanStream=stream;
+  const video=document.createElement('video');
+  video.setAttribute('playsinline',''); video.setAttribute('autoplay',''); video.muted=true; video.srcObject=stream;
+  document.getElementById('scanBox').appendChild(video);
+  try{ await video.play(); }catch(e){}
+  applyBestFocus(stream.getVideoTracks()[0]);
+  const detector=new BarcodeDetector({formats});
+  scanMode='native'; setStatus('');
+  scanTimer=setInterval(async()=>{
+    if(!scanning||scanBusy||video.readyState<2) return;
+    scanBusy=true;
+    try{ const found=await detector.detect(video); if(found && found.length) handleCode(found[0].rawValue); }catch(e){}
+    scanBusy=false;
+  },120);
+  return true;
+}
+function startQuaggaScan(){
+  if(typeof Quagga==='undefined'){ stopScan(); setStatus('Libreria di scansione non disponibile su questo browser.'); return; }
+  scanMode='quagga';
   Quagga.init({
     inputStream:{name:'Live',type:'LiveStream',target:document.getElementById('scanBox'),
-      constraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720},
-        advanced:[{focusMode:'continuous'},{focusMode:'continuous-picture'}]}},
-    locator:{patchSize:'medium',halfSample:true},
-    numOfWorkers: Math.min(4, navigator.hardwareConcurrency||2),
+      constraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},
+    locator:{patchSize:'large',halfSample:true},
+    numOfWorkers: Math.min(2, navigator.hardwareConcurrency||2),
     frequency:10,
-    decoder:{readers:['ean_reader','ean_8_reader','upc_reader','upc_e_reader','code_128_reader'],multiple:false},
+    decoder:{readers:['ean_reader','ean_8_reader']},
     locate:true
   }, err=>{
-    if(err){
-      stopScan();
-      setStatus('⚠️ Fotocamera non accessibile. Controlla il permesso "Fotocamera" per questa pagina nelle impostazioni del browser, oppure inserisci i dati a mano.');
-      return;
-    }
+    if(err){ stopScan(); cameraDeniedMsg(); return; }
+    if(!scanning){ try{Quagga.stop();}catch(e){} return; }
     setStatus('');
     Quagga.start();
-    try{
-      const track = Quagga.CameraAccess.getActiveTrack();
-      const caps = track && track.getCapabilities && track.getCapabilities();
-      if(caps && caps.focusMode){
-        const mode = caps.focusMode.includes('continuous') ? 'continuous'
-          : caps.focusMode.includes('single-shot') ? 'single-shot'
-          : caps.focusMode.includes('auto') ? 'auto' : null;
-        if(mode) track.applyConstraints({advanced:[{focusMode:mode}]}).catch(()=>{});
-      }
-      if(caps && caps.zoom && caps.zoom.max>caps.zoom.min){
-        const z = Math.min(caps.zoom.max, caps.zoom.min + (caps.zoom.max-caps.zoom.min)*0.15);
-        track.applyConstraints({advanced:[{zoom:z}]}).catch(()=>{});
-      }
-    }catch(e){}
+    try{ applyBestFocus(Quagga.CameraAccess.getActiveTrack()); }catch(e){}
   });
-  Quagga.onDetected(onDetected);
-  scanning=true;
+  Quagga.offDetected(quaggaDetected);
+  Quagga.onDetected(quaggaDetected);
 }
-function stopScan(){
-  if(scanning){ try{Quagga.stop();}catch(e){} }
-  scanning=false;
-  document.getElementById('scanBox').style.display='none';
-  document.getElementById('scanHint').style.display='none';
-  document.getElementById('scanBtn').textContent='📷 Scansiona codice';
+function quaggaDetected(res){
+  try{
+    const cr=res.codeResult;
+    const errs=(cr.decodedCodes||[]).filter(x=>x.error!==undefined).map(x=>x.error);
+    const avg=errs.length? errs.reduce((a,b)=>a+b,0)/errs.length : 1;
+    if(avg>0.15) return;
+    handleCode(cr.code);
+  }catch(e){}
 }
-async function onDetected(res){
-  const code=res.codeResult.code;
+function handleCode(raw){
+  if(!scanning) return;
+  const code=String(raw||'').replace(/\D/g,'');
+  if(!isValidBarcode(code)) return;
+  recentCodes.push(code); if(recentCodes.length>4) recentCodes.shift();
+  if(recentCodes.filter(c=>c===code).length<2) return;
+  finishScan(code);
+}
+async function finishScan(code){
   stopScan();
+  if(navigator.vibrate) navigator.vibrate(60);
   if(scanTarget!==null){
     currentVolumes[scanTarget].isbn=code;
     scanTarget=null;
@@ -918,6 +970,18 @@ async function onDetected(res){
   }
   document.getElementById('isbn').value=code;
   await searchGeneric(code, true);
+}
+function stopScan(){
+  scanning=false; scanBusy=false;
+  clearInterval(scanTimer); scanTimer=null;
+  if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
+  if(scanMode==='quagga'){ try{ Quagga.offDetected(quaggaDetected); Quagga.stop(); }catch(e){} }
+  scanMode=null;
+  const box=document.getElementById('scanBox');
+  box.querySelectorAll('video,canvas').forEach(el=>el.remove());
+  box.style.display='none';
+  document.getElementById('scanHint').style.display='none';
+  document.getElementById('scanBtn').textContent='📷 Scansiona codice';
 }
 
 async function toggleFavorite(id, current, ev){
