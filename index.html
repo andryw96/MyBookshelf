@@ -273,7 +273,7 @@ const CATALOGS={
     searchPlaceholder:'Cerca per titolo o artista...' }
 };
 // Opzionale: incolla qui una tua chiave gratuita di Google Books per eliminare il limite di richieste (vedi guida).
-const GOOGLE_BOOKS_KEY='';
+const GOOGLE_BOOKS_KEY='AIzaSyDB-BZbgr00bNkH_Gd_zBWov4yOypmQ6iQ';
 // Opzionale: incolla qui un tuo token personale Discogs per cercare vinili/CD/musicassette anche lì (vedi guida).
 const DISCOGS_TOKEN='';
 let activeCatalog='books';
@@ -863,8 +863,13 @@ function startScan(){
   setStatus('🔎 Richiesta accesso alla fotocamera...');
   Quagga.init({
     inputStream:{name:'Live',type:'LiveStream',target:document.getElementById('scanBox'),
-      constraints:{facingMode:'environment'}},
-    decoder:{readers:['ean_reader','ean_8_reader']}
+      constraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720},
+        advanced:[{focusMode:'continuous'},{focusMode:'continuous-picture'}]}},
+    locator:{patchSize:'medium',halfSample:true},
+    numOfWorkers: Math.min(4, navigator.hardwareConcurrency||2),
+    frequency:10,
+    decoder:{readers:['ean_reader','ean_8_reader','upc_reader','upc_e_reader','code_128_reader'],multiple:false},
+    locate:true
   }, err=>{
     if(err){
       stopScan();
@@ -873,6 +878,12 @@ function startScan(){
     }
     setStatus('');
     Quagga.start();
+    try{
+      const track = Quagga.CameraAccess.getActiveTrack();
+      if(track && track.getCapabilities && track.getCapabilities().focusMode){
+        track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+      }
+    }catch(e){}
   });
   Quagga.onDetected(onDetected);
   scanning=true;
@@ -930,7 +941,7 @@ let googleBooksLimited=false;
 async function lookupBook(value, isIsbn){
   try{
     const q = isIsbn? 'isbn:'+value.replace(/[^0-9Xx]/g,'') : value;
-    const keyParam = GOOGLE_BOOKS_KEY? '&key='+GOOGLE_BOOKS_KEY : 'AIzaSyDB-BZbgr00bNkH_Gd_zBWov4yOypmQ6iQ';
+    const keyParam = GOOGLE_BOOKS_KEY? '&key='+GOOGLE_BOOKS_KEY : '';
     const r = await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults=1'+keyParam);
     if(r.status===429){ googleBooksLimited=true; }
     const d = await r.json();
