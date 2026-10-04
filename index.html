@@ -56,7 +56,7 @@ input,select,textarea{width:100%;padding:10px 12px;margin:5px 0 12px;border:none
 .delbtn{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.45);color:#fff;border-radius:50%;width:26px;height:26px;padding:0;font-size:.85rem;line-height:1;backdrop-filter:none}
 #scanBox{position:relative;background:#000;border-radius:12px;overflow:hidden;margin-bottom:12px;display:none}
 #scanBox video{width:100%;display:block}
-#scanGuide{position:absolute;left:10%;right:10%;top:38%;height:24%;border:2px dashed rgba(255,255,255,.85);border-radius:8px;pointer-events:none;box-shadow:0 0 0 999px rgba(0,0,0,.25)}
+#scanGuide{position:absolute;left:8%;right:8%;top:50%;height:2px;background:rgba(255,59,48,.85);pointer-events:none;z-index:3;box-shadow:0 0 6px rgba(255,59,48,.6)}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:9;padding:20px}
 .modal.open{display:flex}
 .sheet{background:var(--bg);width:100%;max-width:440px;border-radius:20px;padding:20px;max-height:88vh;overflow:auto;transform:scale(.92);opacity:0;transition:transform .2s cubic-bezier(.32,.72,0,1),opacity .2s;position:relative;box-shadow:0 20px 50px rgba(0,0,0,.35)}
@@ -171,7 +171,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
 <div class="sheet">
   <h3 id="sheetTitle" style="margin-top:0">Aggiungi</h3>
   <div id="scanBox"><div id="scanGuide"></div></div>
-  <small class="hint" id="scanHint" style="display:none;margin-top:-8px">Tieni il codice a circa 10-15 cm dalla fotocamera, fermo e con buona luce: molti telefoni non mettono a fuoco da più vicino.</small>
+  <small class="hint" id="scanHint" style="display:none;margin-top:-8px">Inquadra il codice (la linea rossa è solo un riferimento: viene letto ovunque nell'immagine), a circa 10-15 cm, fermo e con buona luce: molti telefoni non mettono a fuoco da più vicino.</small>
   <div class="row" style="margin-bottom:12px">
     <button class="ghost" id="scanBtn" onclick="toggleScan()">📷 Scansiona codice</button>
   </div>
@@ -867,8 +867,7 @@ function startScan(){
   Quagga.init({
     inputStream:{name:'Live',type:'LiveStream',target:document.getElementById('scanBox'),
       constraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720},
-        advanced:[{focusMode:'continuous'},{focusMode:'continuous-picture'}]},
-      area:{top:'38%',right:'10%',left:'10%',bottom:'38%'}},
+        advanced:[{focusMode:'continuous'},{focusMode:'continuous-picture'}]}},
     locator:{patchSize:'medium',halfSample:true},
     numOfWorkers: Math.min(4, navigator.hardwareConcurrency||2),
     frequency:10,
