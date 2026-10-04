@@ -57,6 +57,8 @@ input,select,textarea{width:100%;padding:10px 12px;margin:5px 0 12px;border:none
 #scanBox{position:relative;background:#000;border-radius:12px;overflow:hidden;margin-bottom:12px;display:none}
 #scanBox video{width:100%;display:block}
 #scanBox canvas{position:absolute;left:0;top:0;width:100%;height:100%;z-index:2}
+#scanTools{position:absolute;right:8px;bottom:8px;display:flex;gap:6px;z-index:4}
+#scanTools button{background:rgba(0,0,0,.6);color:#fff;border-radius:999px;min-width:40px;height:40px;padding:0 10px;font-size:1rem;font-weight:500}
 #scanGuide{position:absolute;left:8%;right:8%;top:50%;height:2px;background:rgba(255,59,48,.85);pointer-events:none;z-index:3;box-shadow:0 0 6px rgba(255,59,48,.6)}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:9;padding:20px}
 .modal.open{display:flex}
@@ -171,11 +173,22 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
 <div class="modal" id="modal">
 <div class="sheet">
   <h3 id="sheetTitle" style="margin-top:0">Aggiungi</h3>
-  <div id="scanBox"><div id="scanGuide"></div></div>
-  <small class="hint" id="scanHint" style="display:none;margin-top:-8px">Inquadra il codice (la linea rossa è solo un riferimento: viene letto ovunque nell'immagine), a circa 10-15 cm, fermo e con buona luce: molti telefoni non mettono a fuoco da più vicino.</small>
-  <div class="row" style="margin-bottom:12px">
-    <button class="ghost" id="scanBtn" onclick="toggleScan()">📷 Scansiona codice</button>
+  <div id="scanBox"><div id="scanGuide"></div>
+    <div id="scanTools">
+      <button id="camSwitch" onclick="switchCamera()" aria-label="Cambia fotocamera" style="display:none">🔄</button>
+      <button id="zoomBtn" onclick="toggleZoom()" aria-label="Zoom" style="display:none">🔍1x</button>
+      <button id="torchBtn" onclick="toggleTorch()" aria-label="Flash" style="display:none">🔦</button>
+    </div>
   </div>
+  <small class="hint" id="scanHint" style="display:none;margin-top:-8px">Se l'immagine è sfocata: prova 🔄 per cambiare obiettivo, 🔍 per ingrandire e allontanarti un po', 🔦 per più luce. In alternativa usa "📸 Foto", che sfrutta la fotocamera del telefono.</small>
+  <div class="row" style="margin-bottom:12px">
+    <button class="ghost" id="scanBtn" onclick="toggleScan()">📷 Live</button>
+    <span style="position:relative;flex:1;display:block">
+      <span class="ghost" style="display:block;text-align:center;pointer-events:none;padding:9px 14px;border-radius:10px;font-size:.95rem;font-weight:500">📸 Foto</span>
+      <input type="file" id="barcodePhoto" accept="image/*" capture="environment" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="decodePhoto(event,null)">
+    </span>
+  </div>
+  <input type="file" id="barcodePhotoVol" accept="image/*" capture="environment" style="position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0" onchange="decodePhoto(event,volPhotoIdx)">
   <small class="hint" id="aiHint" style="display:none">Dati trovati online: verifica sempre prima di salvare.</small>
   <div class="row" style="align-items:flex-start">
     <input id="isbn" placeholder="Codice ISBN / barcode" style="flex:2">
@@ -407,7 +420,13 @@ function generateVolumes(){
 }
 function removeVolumeRow(idx){ currentVolumes.splice(idx,1); renderVolumes(); }
 function updateVolume(idx,field,val){ currentVolumes[idx][field]= field==='number'? (val?parseInt(val):'') : val; }
-function startScanFor(idx){ if(scanning) stopScan(); scanTarget=idx; startScan(); }
+function startScanFor(idx){
+  if(scanning) stopScan();
+  if(window.matchMedia && window.matchMedia('(pointer:coarse)').matches){
+    volPhotoIdx=idx; document.getElementById('barcodePhotoVol').click(); return;
+  }
+  scanTarget=idx; startScan();
+}
 
 function toggleMoreMenu(){
   const open = document.getElementById('moreMenu').style.display!=='block';
@@ -860,8 +879,9 @@ function onCoverSelected(ev){
 
 function toggleScan(){ if(scanning){ stopScan(); } else { scanTarget=null; startScan(); } }
 
-// Scansione codici a barre: lettore nativo del browser (BarcodeDetector, Chrome/Android) con Quagga come riserva (iPhone/Safari)
+// Scansione: lettore nativo del browser (BarcodeDetector) con Quagga di riserva; in più lettura da foto scattata con la fotocamera del telefono
 let scanMode=null, scanStream=null, scanTimer=null, scanBusy=false, recentCodes=[];
+let preferredDeviceId=null, activeTrack=null, torchOn=false, zoomStep=0, volPhotoIdx=null, camList=[];
 function isValidBarcode(code){
   if(!/^\d+$/.test(code) || ![8,12,13].includes(code.length)) return false;
   const d=code.split('').map(Number), check=d.pop();
@@ -881,10 +901,66 @@ function applyBestFocus(track){
 function cameraDeniedMsg(){
   setStatus('⚠️ Fotocamera non accessibile. Controlla il permesso "Fotocamera" per questa pagina nelle impostazioni del browser, oppure inserisci i dati a mano.');
 }
+function videoConstraints(w,h){
+  const c={width:{ideal:w},height:{ideal:h}};
+  if(preferredDeviceId) c.deviceId={exact:preferredDeviceId}; else c.facingMode={ideal:'environment'};
+  return c;
+}
+async function refreshCameras(){
+  try{
+    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    const back=devs.filter(d=>/back|rear|posteriore|environment|trasera|arri/i.test(d.label));
+    camList = back.length? back : devs;
+  }catch(e){ camList=[]; }
+}
+async function afterTrackReady(track){
+  activeTrack=track; torchOn=false; zoomStep=0;
+  applyBestFocus(track);
+  let caps=null; try{ caps=track.getCapabilities && track.getCapabilities(); }catch(e){}
+  const torchBtn=document.getElementById('torchBtn'), zoomBtn=document.getElementById('zoomBtn');
+  torchBtn.style.display=(caps && caps.torch)? '' : 'none'; torchBtn.textContent='🔦';
+  zoomBtn.style.display=(caps && caps.zoom && caps.zoom.max>caps.zoom.min)? '' : 'none'; zoomBtn.textContent='🔍1x';
+  await refreshCameras();
+  const sw=document.getElementById('camSwitch');
+  if(camList.length>1){
+    sw.style.display='';
+    const cur=(track.getSettings && track.getSettings().deviceId)||'';
+    const i=Math.max(0,camList.findIndex(d=>d.deviceId===cur));
+    setStatus('📷 Fotocamera '+(i+1)+'/'+camList.length+': '+(camList[i].label||'senza nome')+' — se è sfocata premi 🔄');
+  } else { sw.style.display='none'; setStatus(''); }
+}
+async function switchCamera(){
+  if(!scanning) return;
+  await refreshCameras();
+  if(camList.length<2) return;
+  const cur=(activeTrack && activeTrack.getSettings && activeTrack.getSettings().deviceId)||preferredDeviceId;
+  const i=camList.findIndex(d=>d.deviceId===cur);
+  preferredDeviceId=camList[(i+1)%camList.length].deviceId;
+  stopScan();
+  await startScan();
+}
+async function toggleTorch(){
+  if(!activeTrack) return;
+  try{
+    await activeTrack.applyConstraints({advanced:[{torch:!torchOn}]});
+    torchOn=!torchOn;
+    document.getElementById('torchBtn').textContent = torchOn? '🔦✓' : '🔦';
+  }catch(e){ setStatus('ℹ️ Il flash non è controllabile da questo browser.'); }
+}
+function toggleZoom(){
+  if(!activeTrack) return;
+  try{
+    const caps=activeTrack.getCapabilities();
+    const levels=[1,2,3].map(x=>Math.min(caps.zoom.max, Math.max(caps.zoom.min, caps.zoom.min*x)));
+    zoomStep=(zoomStep+1)%levels.length;
+    activeTrack.applyConstraints({advanced:[{zoom:levels[zoomStep]}]}).catch(()=>{});
+    document.getElementById('zoomBtn').textContent='🔍'+Math.round(levels[zoomStep]/caps.zoom.min)+'x';
+  }catch(e){}
+}
 async function startScan(){
   document.getElementById('scanBox').style.display='block';
   document.getElementById('scanHint').style.display='block';
-  document.getElementById('scanBtn').textContent='⏹️ Ferma scansione';
+  document.getElementById('scanBtn').textContent='⏹️ Ferma';
   setStatus('🔎 Richiesta accesso alla fotocamera...');
   scanning=true; recentCodes=[];
   let res=false;
@@ -902,7 +978,7 @@ async function startNativeScan(){
   if(!formats.length) return false;
   let stream;
   try{
-    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:videoConstraints(1920,1080)});
   }catch(e){ return (e && (e.name==='NotAllowedError'||e.name==='SecurityError'))? 'denied' : false; }
   if(!scanning){ stream.getTracks().forEach(t=>t.stop()); return true; }
   scanStream=stream;
@@ -910,9 +986,9 @@ async function startNativeScan(){
   video.setAttribute('playsinline',''); video.setAttribute('autoplay',''); video.muted=true; video.srcObject=stream;
   document.getElementById('scanBox').appendChild(video);
   try{ await video.play(); }catch(e){}
-  applyBestFocus(stream.getVideoTracks()[0]);
   const detector=new BarcodeDetector({formats});
-  scanMode='native'; setStatus('');
+  scanMode='native';
+  afterTrackReady(stream.getVideoTracks()[0]);
   scanTimer=setInterval(async()=>{
     if(!scanning||scanBusy||video.readyState<2) return;
     scanBusy=true;
@@ -924,9 +1000,9 @@ async function startNativeScan(){
 function startQuaggaScan(){
   if(typeof Quagga==='undefined'){ stopScan(); setStatus('Libreria di scansione non disponibile su questo browser.'); return; }
   scanMode='quagga';
+  const constraints=Object.assign({width:{ideal:1280},height:{ideal:720}}, preferredDeviceId? {deviceId:{exact:preferredDeviceId}} : {facingMode:'environment'});
   Quagga.init({
-    inputStream:{name:'Live',type:'LiveStream',target:document.getElementById('scanBox'),
-      constraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},
+    inputStream:{name:'Live',type:'LiveStream',target:document.getElementById('scanBox'),constraints},
     locator:{patchSize:'large',halfSample:true},
     numOfWorkers: Math.min(2, navigator.hardwareConcurrency||2),
     frequency:10,
@@ -935,9 +1011,8 @@ function startQuaggaScan(){
   }, err=>{
     if(err){ stopScan(); cameraDeniedMsg(); return; }
     if(!scanning){ try{Quagga.stop();}catch(e){} return; }
-    setStatus('');
     Quagga.start();
-    try{ applyBestFocus(Quagga.CameraAccess.getActiveTrack()); }catch(e){}
+    try{ afterTrackReady(Quagga.CameraAccess.getActiveTrack()); }catch(e){ setStatus(''); }
   });
   Quagga.offDetected(quaggaDetected);
   Quagga.onDetected(quaggaDetected);
@@ -976,12 +1051,66 @@ function stopScan(){
   clearInterval(scanTimer); scanTimer=null;
   if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
   if(scanMode==='quagga'){ try{ Quagga.offDetected(quaggaDetected); Quagga.stop(); }catch(e){} }
-  scanMode=null;
+  scanMode=null; activeTrack=null; torchOn=false;
   const box=document.getElementById('scanBox');
   box.querySelectorAll('video,canvas').forEach(el=>el.remove());
   box.style.display='none';
+  ['camSwitch','zoomBtn','torchBtn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.style.display='none'; });
   document.getElementById('scanHint').style.display='none';
-  document.getElementById('scanBtn').textContent='📷 Scansiona codice';
+  document.getElementById('scanBtn').textContent='📷 Live';
+}
+
+// Lettura da foto scattata con la fotocamera del telefono (messa a fuoco e obiettivo gestiti dal telefono)
+function quaggaDecodeOnce(src,size,patchSize){
+  return new Promise(resolve=>{
+    const t=setTimeout(()=>resolve(null),8000);
+    try{
+      Quagga.decodeSingle({
+        src, numOfWorkers:0,
+        inputStream:{size, singleChannel:false},
+        locator:{patchSize, halfSample:false},
+        decoder:{readers:['ean_reader','ean_8_reader']},
+        locate:true
+      }, res=>{ clearTimeout(t); resolve(res && res.codeResult ? res.codeResult.code : null); });
+    }catch(e){ clearTimeout(t); resolve(null); }
+  });
+}
+async function decodeBarcodeFromFile(file){
+  if('BarcodeDetector' in window){
+    try{
+      const sup=await BarcodeDetector.getSupportedFormats();
+      const formats=['ean_13','ean_8','upc_a','upc_e'].filter(f=>sup.includes(f));
+      if(formats.length){
+        const det=new BarcodeDetector({formats});
+        const bmp=await createImageBitmap(file);
+        const found=await det.detect(bmp);
+        if(bmp.close) bmp.close();
+        for(const f of found){ const c=String(f.rawValue||'').replace(/\D/g,''); if(isValidBarcode(c)) return c; }
+      }
+    }catch(e){}
+  }
+  if(typeof Quagga!=='undefined'){
+    const url=URL.createObjectURL(file);
+    try{
+      const tries=[[1600,'medium'],[1600,'small'],[1200,'medium'],[1200,'large'],[800,'large'],[800,'medium'],[2000,'small']];
+      for(const [size,patch] of tries){
+        const c=await quaggaDecodeOnce(url,size,patch);
+        if(c && isValidBarcode(String(c))) return String(c);
+      }
+    } finally { URL.revokeObjectURL(url); }
+  }
+  return null;
+}
+async function decodePhoto(ev, idx){
+  const f=ev.target.files && ev.target.files[0];
+  ev.target.value='';
+  if(!f) return;
+  if(scanning) stopScan();
+  scanTarget=(typeof idx==='number')? idx : null;
+  setStatus('🔎 Lettura del codice dalla foto...');
+  const code=await decodeBarcodeFromFile(f);
+  if(code) finishScan(code);
+  else setStatus('⚠️ Non riesco a leggere il codice dalla foto. Riprova: inquadra solo il codice a barre, ben illuminato, tocca lo schermo per mettere a fuoco prima di scattare e tieni il telefono dritto.');
 }
 
 async function toggleFavorite(id, current, ev){
