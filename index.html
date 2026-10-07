@@ -194,6 +194,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
     <input id="isbn" placeholder="Codice ISBN / barcode" style="flex:2">
     <button class="ghost" style="flex:1;margin-top:5px" onclick="searchByIsbn()">🔍 Cerca</button>
   </div>
+  <div id="webLinks" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-4px 0 10px"></div>
   <div class="row" style="align-items:flex-start">
     <input id="title" placeholder="Titolo *" style="flex:2">
     <button class="ghost" style="flex:1;margin-top:5px" onclick="searchByTitle()">🔍 Cerca</button>
@@ -202,7 +203,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
   <div id="searchStatus" style="color:var(--sub);font-size:.85rem;margin:-6px 0 10px"></div>
   <input id="author" placeholder="Autore">
   <div class="row">
-    <select id="type" style="flex:1" onchange="updateGenreOptions();toggleVolumesSection()">
+    <select id="type" style="flex:1" onchange="updateGenreOptions();toggleVolumesSection();typeTouched=true">
       <option>Fumetto</option><option>Manga</option><option>Libro</option><option>Rivista</option>
     </select>
     <input id="genre" list="genreList" placeholder="Generi, separati da virgola" style="flex:1">
@@ -301,7 +302,24 @@ let db=null, sample=null, assets=null, downloadsCap=null, items=[], scanning=fal
 // e la ricerca usa direttamente Google Books / Open Library / MusicBrainz.
 let pendingRemoteCover=null;
 
+const WEB_LINKS={
+  books:[['Amazon','https://www.amazon.it/s?k='],['IBS','https://www.ibs.it/search/?ts=as&query='],['Google','https://www.google.com/search?q=ISBN+'],['Open Library','https://openlibrary.org/isbn/']],
+  music:[['Amazon','https://www.amazon.it/s?k='],['Discogs','https://www.discogs.com/search/?type=release&q='],['Google','https://www.google.com/search?q=barcode+']]
+};
+function renderWebLinks(){
+  const box=document.getElementById('webLinks'); if(!box) return;
+  box.innerHTML='<span style="font-size:.78rem;color:var(--sub)">Cerca il codice su:</span>'+
+    WEB_LINKS[activeCatalog].map((l,i)=>`<button class="chip" type="button" onclick="openOnWeb(${i})" style="padding:5px 11px;font-size:.8rem">${esc(l[0])} ↗</button>`).join('');
+}
+function openOnWeb(i){
+  const code=document.getElementById('isbn').value.replace(/[^0-9Xx]/g,'');
+  const link=WEB_LINKS[activeCatalog][i];
+  if(!code){ setStatus('Inserisci prima un codice ISBN / barcode da cercare.'); return; }
+  if(link[0]==='Open Library' && !/^\d{10}$|^\d{9}[Xx]$|^\d{13}$/.test(code)){ setStatus('Open Library accetta solo codici ISBN completi.'); return; }
+  window.open(link[1]+encodeURIComponent(code),'_blank','noopener');
+}
 function applyCatalogUI(){
+  renderWebLinks();
   document.getElementById('catalogTitle').textContent=cfg().icon+' '+cfg().title;
   document.getElementById('search').placeholder=cfg().searchPlaceholder;
   document.getElementById('title').placeholder=cfg().titlePlaceholder;
@@ -831,6 +849,7 @@ async function downloadTemplate(){
 function esc(s){return (s+'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}
 
 function openAdd(){
+  typeTouched=false;
   editingId=null;
   document.getElementById('sheetTitle').textContent='Aggiungi';
   document.getElementById('modal').classList.add('open');
@@ -845,6 +864,7 @@ function openAdd(){
   toggleVolumesSection(); renderVolumes();
 }
 function openEdit(item){
+  typeTouched=true;
   editingId=item.id;
   document.getElementById('sheetTitle').textContent='Modifica';
   document.getElementById('modal').classList.add('open');
@@ -1143,44 +1163,142 @@ function searchByTitle(){
   if(!v){ setStatus('Inserisci prima almeno il titolo (anche parziale).'); return; }
   searchGeneric(v, false);
 }
-let googleBooksLimited=false;
-async function lookupBook(value, isIsbn){
+let googleBooksLimited=false, typeTouched=false;
+
+// ---- Riconoscimento di genere e tipo a partire dalle categorie trovate online (Google Books / Open Library) ----
+const BOOK_GENRE_RULES=[
+  [/shonen|sh[oō]nen|shounen/,'Shonen',1],
+  [/shojo|sh[oō]jo|shoujo/,'Shojo',1],
+  [/seinen/,'Seinen',1],
+  [/josei/,'Josei',1],
+  [/superhero|super-hero|supereroi/,'Supereroi',1],
+  [/science fiction|sci-?fi|fantascienza/,'Fantascienza',1],
+  [/dystopi|distopi/,'Distopico',1],
+  [/fantasy|fantastico/,'Fantasy',1],
+  [/horror/,'Horror',1],
+  [/mystery|detective|thriller|giallo|noir/,'Giallo',1],
+  [/crime|suspense/,'Giallo',0],
+  [/romance|romantic/,'Romantico',0],
+  [/biograph|autobiograph|memoir|biografi/,'Biografia',1],
+  [/histor|storic/,'Storico',0],
+  [/satir/,'Satira',0],
+  [/humou?r|comedy|umoristic|comic fiction/,'Umoristico',0],
+  [/adventure|avventur/,'Avventura',0],
+  [/\baction\b|azione/,'Azione',0],
+  [/classics?\b|classici/,'Classici',0],
+  [/fairy tale|fiaba|fiabe|favol/,'Fiabe',0]
+];
+function inferBookInfo(o){
+  const cats=(o.categories||[]).join(' | ').toLowerCase().replace(/true crime/g,'true-c');
+  const desc=String(o.description||'').slice(0,700).toLowerCase();
+  const pub=String(o.publisher||'').toLowerCase();
+  let type='';
+  if(/manga/.test(cats)) type='Manga';
+  else if(/comics|comic books?|graphic novel|fumett|comic strip/.test(cats)) type='Fumetto';
+  else if(/periodical|magazine|rivist/.test(cats)) type='Rivista';
+  else if(cats) type='Libro';
+  if(!type && /planet manga|j-?pop|goen|dynit|star comics/.test(pub)) type='Manga';
+  const found=[];
+  for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(cats) && !found.includes(name)) found.push(name); }
+  if(!found.length){
+    for(const [re,name,strong] of BOOK_GENRE_RULES){ if(strong && re.test(desc) && !found.includes(name)) found.push(name); }
+  }
+  if(!found.length){
+    if(/fiction|novel|romanz|literary|drama|stories/.test(cats+' '+desc.slice(0,200))) found.push('Romanzo');
+    else if(/true-c|political|philosoph|psycholog|social|business|econom|self-help|religion|science|nature|technology|computers|education|health|cooking|\bart\b|music|travel|sports|nonfiction|saggi|politic|medical|mathematics/.test(cats)) found.push('Saggistica');
+  }
+  return {type, genre:found.slice(0,2).join(', ')};
+}
+const MUSIC_GENRE_RULES=[
+  [/hip.?hop|\brap\b|trap/,'Hip Hop'],
+  [/electronic|elettronic|techno|house|ambient|synth|trance|drum.?and.?bass|\bedm\b/,'Elettronica'],
+  [/metal/,'Metal'],
+  [/punk/,'Punk'],
+  [/rock/,'Rock'],
+  [/jazz/,'Jazz'],
+  [/classical|classica|orchestr|opera|baroque|symphon/,'Classica'],
+  [/blues/,'Blues'],
+  [/reggae|\bska\b|\bdub\b/,'Reggae'],
+  [/\bsoul\b|r&b|\brnb\b/,'Soul'],
+  [/funk/,'Funk'],
+  [/country/,'Country'],
+  [/folk|world|celtic/,'Folk'],
+  [/latin|salsa|bossa|tango/,'Latin'],
+  [/stage|screen|soundtrack|score|film/,'Colonne sonore'],
+  [/disco/,'Disco'],
+  [/gospel/,'Gospel'],
+  [/\bpop\b/,'Pop']
+];
+function inferMusicGenres(tags){
+  const t=(tags||[]).join(' | ').toLowerCase();
+  const found=[];
+  for(const [re,name] of MUSIC_GENRE_RULES){ if(re.test(t) && !found.includes(name)) found.push(name); }
+  return found.slice(0,2).join(', ');
+}
+
+// ---- Ricerca online ----
+function googleKeyParam(){ return GOOGLE_BOOKS_KEY? '&key='+GOOGLE_BOOKS_KEY : ''; }
+function pickGoogleVolume(items){
+  const vi=(items||[]).map(x=>x.volumeInfo).filter(v=>v && v.title);
+  if(!vi.length) return null;
+  const first=vi[0];
+  const norm=t=>String(t||'').toLowerCase().replace(/[^a-z0-9àèéìòù]+/g,' ').trim();
+  let cats=first.categories||[], desc=first.description||'';
+  if(!cats.length || !desc){
+    for(const v of vi.slice(1)){
+      if(norm(v.title)!==norm(first.title)) continue;
+      if(!cats.length && v.categories) cats=v.categories;
+      if(!desc && v.description) desc=v.description;
+    }
+  }
+  return {v:first, categories:cats, description:desc};
+}
+async function olSubjectsByIsbn(code){
   try{
-    const q = isIsbn? 'isbn:'+value.replace(/[^0-9Xx]/g,'') : value;
-    const keyParam = GOOGLE_BOOKS_KEY? '&key='+GOOGLE_BOOKS_KEY : '';
-    const r = await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults=1'+keyParam);
+    const r=await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:'+encodeURIComponent(code)+'&format=json&jscmd=data');
+    const d=await r.json(); const b=d['ISBN:'+code];
+    return (b && b.subjects)? b.subjects.map(x=>x.name||x).slice(0,25) : [];
+  }catch(e){ return []; }
+}
+function googleResult(it, cats, desc){
+  return { title:it.title, author:(it.authors||[]).join(', '), publisher:it.publisher||'',
+    isbn:((it.industryIdentifiers||[])[0]||{}).identifier||'',
+    coverUrl: it.imageLinks && (it.imageLinks.thumbnail||it.imageLinks.smallThumbnail) || null,
+    categories:cats, description:desc };
+}
+async function lookupBook(value, isIsbn){
+  const code=value.replace(/[^0-9Xx]/g,'');
+  try{
+    const q = isIsbn? 'isbn:'+code : value;
+    const r = await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults='+(isIsbn?1:5)+googleKeyParam());
     if(r.status===429){ googleBooksLimited=true; }
     const d = await r.json();
-    const it = d.items && d.items[0] && d.items[0].volumeInfo;
-    if(it && (it.title)){
-      return { title:it.title, author:(it.authors||[]).join(', '), publisher:it.publisher||'',
-        isbn:((it.industryIdentifiers||[])[0]||{}).identifier||'',
-        coverUrl: it.imageLinks && (it.imageLinks.thumbnail||it.imageLinks.smallThumbnail) || null,
-        genre:(it.categories||[])[0]||'' };
+    const p = pickGoogleVolume(d.items);
+    if(p){
+      let cats=p.categories;
+      if(!cats.length && isIsbn) cats=await olSubjectsByIsbn(code);
+      return googleResult(p.v, cats, p.description);
     }
   }catch(e){}
   try{
     if(isIsbn){
-      const r2=await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:'+encodeURIComponent(value)+'&format=json&jscmd=data');
-      const d2=await r2.json(); const b=d2['ISBN:'+value];
-      if(b) return { title:b.title, author:(b.authors||[]).map(a=>a.name).join(', '), publisher:(b.publishers||[]).map(p=>p.name).join(', '), isbn:value, coverUrl:b.cover&&(b.cover.medium||b.cover.small)||null };
+      const r2=await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:'+encodeURIComponent(code)+'&format=json&jscmd=data');
+      const d2=await r2.json(); const b=d2['ISBN:'+code];
+      if(b) return { title:b.title, author:(b.authors||[]).map(a=>a.name).join(', '), publisher:(b.publishers||[]).map(p=>p.name).join(', '), isbn:code,
+        coverUrl:b.cover&&(b.cover.medium||b.cover.small)||null, categories:(b.subjects||[]).map(x=>x.name||x).slice(0,25) };
     } else {
       const r2=await fetch('https://openlibrary.org/search.json?q='+encodeURIComponent(value)+'&limit=1');
       const d2=await r2.json(); const b=d2.docs&&d2.docs[0];
-      if(b) return { title:b.title, author:(b.author_name||[]).join(', '), publisher:(b.publisher||[])[0]||'', coverUrl:b.cover_i?('https://covers.openlibrary.org/b/id/'+b.cover_i+'-M.jpg'):null };
+      if(b) return { title:b.title, author:(b.author_name||[]).join(', '), publisher:(b.publisher||[])[0]||'',
+        coverUrl:b.cover_i?('https://covers.openlibrary.org/b/id/'+b.cover_i+'-M.jpg'):null, categories:(b.subject||[]).slice(0,25) };
     }
   }catch(e){}
   if(isIsbn){
     try{
-      const keyParam = GOOGLE_BOOKS_KEY? '&key='+GOOGLE_BOOKS_KEY : '';
-      const r3=await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(value)+'&maxResults=1'+keyParam);
+      const r3=await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(value)+'&maxResults=1'+googleKeyParam());
       if(r3.status===429) googleBooksLimited=true;
-      const d3=await r3.json(); const it3=d3.items && d3.items[0] && d3.items[0].volumeInfo;
-      if(it3 && it3.title){
-        return { title:it3.title, author:(it3.authors||[]).join(', '), publisher:it3.publisher||'',
-          coverUrl: it3.imageLinks && (it3.imageLinks.thumbnail||it3.imageLinks.smallThumbnail) || null,
-          genre:(it3.categories||[])[0]||'' };
-      }
+      const d3=await r3.json(); const p3=pickGoogleVolume(d3.items);
+      if(p3) return googleResult(p3.v, p3.categories, p3.description);
     }catch(e){}
   }
   return null;
@@ -1194,6 +1312,16 @@ async function lookupMusic(value, isBarcode){
       const out={ title:rel.title, author:(rel['artist-credit']||[]).map(a=>a.name).join(', '),
         publisher:(rel['label-info']&&rel['label-info'][0]&&rel['label-info'][0].label&&rel['label-info'][0].label.name)||'' };
       try{ const cr=await fetch('https://coverartarchive.org/release/'+rel.id+'/front-250'); if(cr.ok) out.coverUrl=cr.url; }catch(e){}
+      try{
+        const rgid=rel['release-group'] && rel['release-group'].id;
+        if(rgid){
+          const gr=await fetch('https://musicbrainz.org/ws/2/release-group/'+rgid+'?inc=genres+tags&fmt=json');
+          if(gr.ok){
+            const gd=await gr.json(); const byCount=(a,b)=>(b.count||0)-(a.count||0);
+            out.genreTags=(gd.genres||[]).slice().sort(byCount).map(x=>x.name).concat((gd.tags||[]).slice().sort(byCount).map(x=>x.name));
+          }
+        }
+      }catch(e){}
       return out;
     }
   }catch(e){}
@@ -1206,7 +1334,8 @@ async function lookupMusic(value, isBarcode){
       const d2=await r2.json(); const res=d2.results&&d2.results[0];
       if(res){
         const parts=(res.title||'').split(' - ');
-        return { title: parts[1]||res.title, author: parts[0]||'', publisher:(res.label||[])[0]||'', coverUrl: res.cover_image||res.thumb||null };
+        return { title: parts[1]||res.title, author: parts[0]||'', publisher:(res.label||[])[0]||'', coverUrl: res.cover_image||res.thumb||null,
+          genreTags:(res.genre||[]).concat(res.style||[]) };
       }
     }catch(e){}
   }
@@ -1222,13 +1351,21 @@ async function searchGeneric(value, isCodeOnly){
       if(out.author) document.getElementById('author').value = out.author;
       if(out.publisher) document.getElementById('publisher').value = out.publisher;
       if(out.isbn && !document.getElementById('isbn').value.trim()) document.getElementById('isbn').value = out.isbn;
-      if(out.genre) document.getElementById('genre').value = out.genre;
+      // genere (e tipo, per i libri) riconosciuti dalle categorie trovate online
+      let genre='', type='';
+      if(activeCatalog==='music'){ genre=inferMusicGenres(out.genreTags); }
+      else { const inf=inferBookInfo(out); genre=inf.genre; type=inf.type; }
+      const gEl=document.getElementById('genre');
+      if(genre && !gEl.value.trim()) gEl.value=genre;
+      if(type && !typeTouched && cfg().types.includes(type)){
+        document.getElementById('type').value=type; updateGenreOptions(); toggleVolumesSection();
+      }
       if(out.coverUrl){
         pendingRemoteCover=out.coverUrl;
         const prev=document.getElementById('coverPreview'); prev.src=out.coverUrl; prev.style.display='block';
       }
       document.getElementById('aiHint').style.display='block';
-      setStatus('✅ Trovato online, controlla i dati prima di salvare.');
+      setStatus('✅ Trovato online'+(gEl.value.trim()? '' : ' (genere non riconosciuto: scegline uno)')+', controlla i dati prima di salvare.');
     } else if(googleBooksLimited){
       setStatus('⏳ Troppe ricerche in poco tempo (limite gratuito di Google Books). Riprova tra un minuto, o aggiungi una chiave API gratuita (vedi guida) per non avere più questo limite.');
     } else if(isCodeOnly){
