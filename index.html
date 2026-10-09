@@ -293,6 +293,8 @@ const CATALOGS={
 const GOOGLE_BOOKS_KEY='AIzaSyDB-BZbgr00bNkH_Gd_zBWov4yOypmQ6iQ';
 // Opzionale: incolla qui un tuo token personale Discogs per cercare vinili/CD/musicassette anche lì (vedi guida).
 const DISCOGS_TOKEN='';
+// URL del tuo Worker Cloudflare (vedi GUIDA-WORKER.md). Vuoto = ricerca su OPAC SBN/NiceBooks/Agenzia ISBN disattivata.
+const WORKER_URL='https://mybookshelf.arxs32.workers.dev';
 let activeCatalog='books';
 function cfg(){ return CATALOGS[activeCatalog]; }
 function COL(){ return cfg().collection; }
@@ -1276,6 +1278,20 @@ function googleResult(it, cats, desc){
     coverUrl: it.imageLinks && (it.imageLinks.thumbnail||it.imageLinks.smallThumbnail) || null,
     categories:cats, description:desc };
 }
+async function workerLookup(value,isIsbn,code){
+  if(!WORKER_URL) return null;
+  try{
+    const r=await fetch(WORKER_URL.replace(/\/$/,'')+'/?'+(isIsbn?'isbn='+encodeURIComponent(code):'q='+encodeURIComponent(value)));
+    const d=await r.json();
+    const list=(d.results||[]).filter(x=>x.title);
+    if(!list.length) return null;
+    const best=list.find(x=>x.title&&x.author)||list[0];
+    const pub=list.find(x=>x.publisher);
+    const cover=list.find(x=>x.coverUrl);
+    return { title:best.title, author:best.author||'', publisher:best.publisher||(pub&&pub.publisher)||'',
+      isbn:best.isbn||(isIsbn?code:''), coverUrl:cover?cover.coverUrl:null, categories:[], description:'', source:best.source };
+  }catch(e){ return null; }
+}
 async function lookupBook(value, isIsbn){
   const code=value.replace(/[^0-9Xx]/g,'');
   try{
@@ -1311,7 +1327,7 @@ async function lookupBook(value, isIsbn){
       if(p3) return googleResult(p3.v, p3.categories, p3.description);
     }catch(e){}
   }
-  return null;
+  return await workerLookup(value,isIsbn,code);
 }
 async function lookupMusic(value, isBarcode){
   try{
@@ -1375,7 +1391,7 @@ async function searchGeneric(value, isCodeOnly){
         const prev=document.getElementById('coverPreview'); prev.src=out.coverUrl; prev.style.display='block';
       }
       document.getElementById('aiHint').style.display='block';
-      setStatus('✅ Trovato online'+(gEl.value.trim()? '' : ' (genere non riconosciuto: scegline uno)')+', controlla i dati prima di salvare.');
+      setStatus('✅ Trovato online'+(out.source?' ('+out.source+')':'')+(gEl.value.trim()? '' : ' (genere non riconosciuto: scegline uno)')+', controlla i dati prima di salvare.');
     } else if(googleBooksLimited){
       setStatus('⏳ Troppe ricerche in poco tempo (limite gratuito di Google Books). Riprova tra un minuto, o aggiungi una chiave API gratuita (vedi guida) per non avere più questo limite.');
     } else if(isCodeOnly){
