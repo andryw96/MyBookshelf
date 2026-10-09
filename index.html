@@ -303,19 +303,29 @@ let db=null, sample=null, assets=null, downloadsCap=null, items=[], scanning=fal
 let pendingRemoteCover=null;
 
 const WEB_LINKS={
-  books:[['Amazon','https://www.amazon.it/s?k='],['IBS','https://www.ibs.it/search/?ts=as&query='],['Google','https://www.google.com/search?q=ISBN+'],['Open Library','https://openlibrary.org/isbn/']],
+  books:[['Amazon','https://www.amazon.it/s?k='],['IBS','https://www.ibs.it/search/?ts=as&query='],['Google','https://www.google.com/search?q=ISBN+'],['Open Library','https://openlibrary.org/isbn/'],['OPAC SBN','https://opac.sbn.it/','copy'],['Agenzia ISBN','https://www.isbn.it/','copy'],['NiceBooks','https://www.nicebooks.com/','copy']],
   music:[['Amazon','https://www.amazon.it/s?k='],['Discogs','https://www.discogs.com/search/?type=release&q='],['Google','https://www.google.com/search?q=barcode+']]
 };
 function renderWebLinks(){
   const box=document.getElementById('webLinks'); if(!box) return;
   box.innerHTML='<span style="font-size:.78rem;color:var(--sub)">Cerca il codice su:</span>'+
-    WEB_LINKS[activeCatalog].map((l,i)=>`<button class="chip" type="button" onclick="openOnWeb(${i})" style="padding:5px 11px;font-size:.8rem">${esc(l[0])} ↗</button>`).join('');
+    WEB_LINKS[activeCatalog].map((l,i)=>`<button class="chip" type="button" onclick="openOnWeb(${i})" style="padding:5px 11px;font-size:.8rem">${l[2]==='copy'?'📋 ':''}${esc(l[0])} ↗</button>`).join('');
 }
 function openOnWeb(i){
   const code=document.getElementById('isbn').value.replace(/[^0-9Xx]/g,'');
   const link=WEB_LINKS[activeCatalog][i];
   if(!code){ setStatus('Inserisci prima un codice ISBN / barcode da cercare.'); return; }
   if(link[0]==='Open Library' && !/^\d{10}$|^\d{9}[Xx]$|^\d{13}$/.test(code)){ setStatus('Open Library accetta solo codici ISBN completi.'); return; }
+  if(link[2]==='copy'){
+    // sito senza indirizzo di ricerca diretto verificato: copio il codice e apro il sito, tu lo incolli nella ricerca
+    try{
+      navigator.clipboard.writeText(code)
+        .then(()=>setStatus('📋 Codice '+code+' copiato: incollalo nella ricerca di '+link[0]+'.'))
+        .catch(()=>setStatus('Codice da cercare su '+link[0]+': '+code+' (copialo a mano).'));
+    }catch(e){ setStatus('Codice da cercare su '+link[0]+': '+code+' (copialo a mano).'); }
+    window.open(link[1],'_blank','noopener');
+    return;
+  }
   window.open(link[1]+encodeURIComponent(code),'_blank','noopener');
 }
 function applyCatalogUI(){
