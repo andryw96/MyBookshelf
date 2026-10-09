@@ -77,6 +77,13 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
 @media (min-width:700px){main{max-width:1100px}.grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}}
 @media (min-width:1100px){main{max-width:1320px}.grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}}
 </style>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a84ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Libreria">
+<link rel="apple-touch-icon" href="pwa/apple-touch-icon.png">
+<link rel="icon" href="pwa/icon-192.png">
 </head>
 <body>
 <div id="homeScreen" style="min-height:100%;display:flex;flex-direction:column;justify-content:center;padding:24px;max-width:460px;margin:0 auto">
@@ -1457,5 +1464,6 @@ async function del(id){
 </script>
 </div>
 <div id="toast"></div>
+<script>if('serviceWorker' in navigator && location.protocol.startsWith('http')){window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{});});}</script>
 </body>
 </html>
