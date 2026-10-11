@@ -216,6 +216,9 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
     <input id="genre" list="genreList" placeholder="Generi, separati da virgola" style="flex:1">
   </div>
   <div id="volumesSection" style="display:none">
+    <label style="font-size:.8rem;color:var(--sub)">Nome della serie (es. One Piece, Bleach)</label>
+    <input id="seriesName" list="seriesList" placeholder="Se lo lasci vuoto uso il Titolo come nome serie">
+    <datalist id="seriesList"></datalist>
     <label style="font-size:.8rem;color:var(--sub)">Volumi totali nella collana (se noti)</label>
     <input id="totalVolumes" type="number" min="1" placeholder="Es. 12 (lascia vuoto se non lo sai)" oninput="renderVolumes()">
     <label style="font-size:.8rem;color:var(--sub)">Volumi posseduti</label>
@@ -225,7 +228,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
     </div>
     <div id="volumesList"></div>
     <button class="ghost" type="button" onclick="addVolumeRow()" style="width:100%;margin-bottom:10px">+ Aggiungi volume</button>
-    <small class="hint">"Genera" crea le righe in base alla quantità (modifica pure il "N." se i volumi non sono in sequenza). Al salvataggio ogni riga diventa un articolo separato in libreria, con il titolo seguito dal numero di volume. Quando sarà disponibile un collegamento a una libreria online, potrò compilare da solo ISBN/codice di ogni volume.</small>
+    <small class="hint">"Genera" crea le righe in base alla quantità (modifica pure il "N." se i volumi non sono in sequenza). Al salvataggio ogni riga diventa un articolo separato, con titolo "Vol. 001 - titolo del volume", e la serie viene mostrata sulle card. Quando sarà disponibile un collegamento a una libreria online, potrò compilare da solo ISBN/codice di ogni volume.</small>
   </div>
   <datalist id="genreList"></datalist>
   <select id="status">
@@ -431,6 +434,22 @@ function toggleVolumesSection(){
   const t=document.getElementById('type').value;
   document.getElementById('volumesSection').style.display=cfg().seriesTypes.includes(t)?'block':'none';
 }
+function seriesOf(i){
+  if(i.series) return i.series;
+  const m=(i.title||'').match(/^(.*) Vol\. (\d+)$/);
+  return (m && cfg().seriesTypes.includes(i.type)) ? m[1] : '';
+}
+function volOf(i){
+  if(i.volumeNumber) return i.volumeNumber;
+  const m=(i.title||'').match(/Vol\. (\d+)/); return m? parseInt(m[1]) : 0;
+}
+function volTitleOf(i){
+  const m=(i.title||'').match(/^Vol\. \d+\s*-\s*(.+)$/); return m? m[1] : '';
+}
+function updateSeriesOptions(){
+  const names=[...new Set(items.map(seriesOf).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const dl=document.getElementById('seriesList'); if(dl) dl.innerHTML=names.map(n=>`<option value="${esc(n)}">`).join('');
+}
 function padVol(n, total){
   n = n||0;
   const width = total ? String(total).length : Math.max(2, String(n).length);
@@ -445,13 +464,14 @@ function renderVolumes(){
       <input placeholder="ISBN volume (opzionale)" value="${esc(v.isbn||'')}" style="flex:1;margin:0" oninput="updateVolume(${idx},'isbn',this.value)">
       <button class="ghost" type="button" style="flex:0 0 auto;padding:8px 10px" onclick="startScanFor(${idx})">📷</button>
       <button class="ghost" type="button" style="flex:0 0 auto;padding:8px 10px" onclick="removeVolumeRow(${idx})">🗑️</button>
-    </div>`).join('');
+    </div>
+    <input placeholder="Titolo del volume (opzionale, es. Romance Dawn)" value="${esc(v.title||'')}" style="margin:-2px 0 10px" oninput="updateVolume(${idx},'title',this.value)">`).join('');
 }
-function addVolumeRow(){ currentVolumes.push({number:currentVolumes.length+1,isbn:''}); renderVolumes(); }
+function addVolumeRow(){ currentVolumes.push({number:currentVolumes.length+1,isbn:'',title:''}); renderVolumes(); }
 function generateVolumes(){
   const n=parseInt(document.getElementById('quickCount').value);
   if(!n||n<1) return;
-  currentVolumes = Array.from({length:n},(_,i)=>({number:i+1,isbn:''}));
+  currentVolumes = Array.from({length:n},(_,i)=>({number:i+1,isbn:'',title:''}));
   document.getElementById('quickCount').value='';
   renderVolumes();
 }
@@ -511,7 +531,7 @@ function getFiltered(){
   const onlyFav=document.getElementById('onlyFavFilter').checked;
   const sortBy=document.getElementById('sortBy').value;
   let filtered=items.filter(i=>
-    (!q||(i.title||'').toLowerCase().includes(q)||(i.subtitle||'').toLowerCase().includes(q)||(i.author||'').toLowerCase().includes(q)) &&
+    (!q||(i.title||'').toLowerCase().includes(q)||seriesOf(i).toLowerCase().includes(q)||(i.subtitle||'').toLowerCase().includes(q)||(i.author||'').toLowerCase().includes(q)) &&
     (currentType==='Tutti'||i.type===currentType) &&
     (currentStatus==='Tutti'||(i.status||cfg().statusOptions[0])===currentStatus) &&
     (!g||genresOf(i).includes(g)) &&
@@ -590,7 +610,9 @@ function renderCard(i){
     : `<button class="delbtn" style="left:6px;right:auto;background:${i.favorite?'var(--accent2)':'rgba(20,22,29,.55)'}" onclick="toggleFavorite('${i.id}',${!!i.favorite},event)" aria-label="Preferito">${i.favorite?'★':'☆'}</button>
        <button class="delbtn" onclick="event.stopPropagation();del('${i.id}')" aria-label="Elimina">🗑️</button>`;
   const subtitleHtml = i.subtitle? `<div class="s" style="font-style:italic;opacity:.85">${esc(i.subtitle)}</div>` : '';
-  const titleHtml=`<div class="t">${esc(i.title||'(senza titolo)')}</div>${subtitleHtml}`;
+  const serName=seriesOf(i);
+  const seriesHtml = serName? `<div class="s" style="font-weight:600;color:var(--accent)">📚 ${esc(serName)}</div>` : '';
+  const titleHtml=`${seriesHtml}<div class="t">${esc(i.title||'(senza titolo)')}</div>${subtitleHtml}`;
   if(mode==='cover'){
     el.innerHTML=`${coverHtml}${topBtn}`;
   } else if(mode==='title'){
@@ -610,11 +632,11 @@ function renderCard(i){
 function groupSeries(list){
   const groups={}, singles=[];
   list.forEach(i=>{
-    const m=(i.title||'').match(/^(.*) Vol\. (\d+)$/);
-    if(m && cfg().seriesTypes.includes(i.type)){
-      const key=m[1]+'|'+(i.author||'');
-      if(!groups[key]) groups[key]={base:m[1],author:i.author,genre:i.genre,coverUrl:'',total:null,items:[]};
-      groups[key].items.push({...i, volNum:parseInt(m[2])});
+    const name=seriesOf(i);
+    if(name && cfg().seriesTypes.includes(i.type)){
+      const key=name+'|'+(i.author||'');
+      if(!groups[key]) groups[key]={base:name,author:i.author,genre:i.genre,coverUrl:'',total:null,items:[]};
+      groups[key].items.push({...i, volNum:volOf(i)});
       if(i.coverUrl && !groups[key].coverUrl) groups[key].coverUrl=i.coverUrl;
       if(i.totalVolumes) groups[key].total=i.totalVolumes;
     } else singles.push(i);
@@ -645,7 +667,7 @@ function renderSeriesView(filtered,list){
       exp.innerHTML = g.items.map(v=>{
         const sIcon=cfg().statusIcons[v.status]||cfg().statusIcons[cfg().statusOptions[0]];
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
-        <span><button class="ghost" onclick="cycleStatus('${v.id}','${v.status||cfg().statusOptions[0]}',event)" style="padding:4px 9px">${sIcon}</button> Vol. ${padVol(v.volNum,total)}</span>
+        <span><button class="ghost" onclick="cycleStatus('${v.id}','${v.status||cfg().statusOptions[0]}',event)" style="padding:4px 9px">${sIcon}</button> Vol. ${padVol(v.volNum,total)}${volTitleOf(v)?' – '+esc(volTitleOf(v)):''}</span>
         <span><button class="ghost" onclick="event.stopPropagation();openEdit(items.find(x=>x.id==='${v.id}'))" style="padding:4px 9px">✏️</button>
         <button class="ghost" onclick="event.stopPropagation();del('${v.id}')" style="padding:4px 9px">🗑️</button></span></div>`;
       }).join('');
@@ -865,14 +887,15 @@ async function downloadTemplate(){
   if(downloadsCap){ try{ await downloadsCap.save({filename:'modello-'+activeCatalog+'.csv',data}); }catch(e){} }
   else { const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([data],{type:'text/csv'})); a.download='modello-'+activeCatalog+'.csv'; document.body.appendChild(a); a.click(); a.remove(); }
 }
-function esc(s){return (s+'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}
+function esc(s){return (s+'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 
 function openAdd(){
   typeTouched=false;
   editingId=null;
   document.getElementById('sheetTitle').textContent='Aggiungi';
   document.getElementById('modal').classList.add('open');
-  ['isbn','title','subtitle','author','publisher','notes','genre'].forEach(id=>document.getElementById(id).value='');
+  ['isbn','title','subtitle','author','publisher','notes','genre','seriesName'].forEach(id=>document.getElementById(id).value='');
+  updateSeriesOptions();
   document.getElementById('status').value=cfg().statusOptions[0];
   document.getElementById('aiHint').style.display='none';
   document.getElementById('searchStatus').textContent='';
@@ -890,6 +913,8 @@ function openEdit(item){
   document.getElementById('isbn').value=item.isbn||'';
   document.getElementById('title').value=item.title||'';
   document.getElementById('subtitle').value=item.subtitle||'';
+  document.getElementById('seriesName').value=seriesOf(item);
+  updateSeriesOptions();
   document.getElementById('author').value=item.author||'';
   document.getElementById('publisher').value=item.publisher||'';
   document.getElementById('notes').value=item.notes||'';
@@ -1411,16 +1436,18 @@ async function searchGeneric(value, isCodeOnly){
 
 async function save(){
   const title=document.getElementById('title').value.trim();
-  if(!title){ setStatus('Inserisci almeno il titolo.'); return; }
   const type=document.getElementById('type').value;
-  const vols = currentVolumes.filter(v=>v.number||v.isbn);
+  const vols = currentVolumes.filter(v=>v.number||v.isbn||v.title);
   const isMultiVolume = cfg().seriesTypes.includes(type) && vols.length>0;
+  const seriesInput = cfg().seriesTypes.includes(type)? document.getElementById('seriesName').value.trim() : '';
+  if(!title && !(isMultiVolume && seriesInput)){ setStatus('Inserisci almeno il titolo (o il nome della serie).'); return; }
   const existing = editingId ? items.find(i=>i.id===editingId) : null;
   const base={
     subtitle:document.getElementById('subtitle').value.trim(),
     author:document.getElementById('author').value.trim(),
     publisher:document.getElementById('publisher').value.trim(),
     type,
+    series: seriesInput,
     genre:document.getElementById('genre').value.trim(),
     status:document.getElementById('status').value,
     notes:document.getElementById('notes').value.trim(),
@@ -1433,7 +1460,10 @@ async function save(){
   if(isMultiVolume){
     const totalVolumes = parseInt(document.getElementById('totalVolumes').value)||null;
     for(const v of vols){
-      const data={...base, title: v.number? `${title} Vol. ${padVol(v.number,totalVolumes)}` : title, isbn:v.isbn||'', volumeNumber:v.number||null, totalVolumes, added:Date.now()};
+      const serName = seriesInput || title;
+      const vt = (v.title||'').trim();
+      const vTitle = v.number ? `Vol. ${padVol(v.number,totalVolumes)}${vt?' - '+vt:''}` : (vt || title || serName);
+      const data={...base, series:serName, title:vTitle, isbn:v.isbn||'', volumeNumber:v.number||null, totalVolumes, added:Date.now()};
       if(db){ await db.collection(COL()).add(data); }
       else { items.unshift({id:'local'+Date.now()+Math.random(), ...data}); }
     }
@@ -1443,6 +1473,7 @@ async function save(){
     }
   } else {
     const data={...base, title, isbn:document.getElementById('isbn').value.trim(), added: existing ? existing.added : Date.now()};
+    if(existing && existing.volumeNumber){ data.volumeNumber=existing.volumeNumber; data.totalVolumes=existing.totalVolumes||null; }
     if(db){
       if(editingId){ await db.doc(COL()+'/'+editingId).set(data); }
       else { await db.collection(COL()).add(data); }
