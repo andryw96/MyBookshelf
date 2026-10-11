@@ -31,9 +31,23 @@ input,select,textarea{width:100%;padding:10px 12px;margin:5px 0 12px;border:none
 .panel select,.panel input{background:var(--bg)}
 .filters{display:flex;gap:7px;overflow-x:auto;padding:2px 0 12px}
 .genresel{width:auto;margin:0;flex:0 0 auto}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px 10px}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 10px}
+.grid.uniform{grid-auto-rows:1fr}
+.grid .card{display:flex;flex-direction:column;min-width:0}
+.grid .card .cover{flex:0 0 auto}
+.grid .card .meta{flex:1;min-width:0}
+.grid:not(.list-view) .meta .tag{display:block;width:fit-content;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.grid:not(.list-view) .meta .tag .dot{margin-right:4px}
+@media (max-width:600px){
+  .grid{gap:12px 6px}
+  .grid:not(.list-view) .meta .t{font-size:.72rem}
+  .grid:not(.list-view) .meta .s{font-size:.64rem}
+  .grid:not(.list-view) .meta .tag{font-size:.6rem;padding:2px 6px}
+  .grid:not(.list-view) .meta .tag.tg-type,.grid:not(.list-view) .meta .stext,.grid:not(.list-view) .meta .vtot{display:none}
+  .grid .cover.placeholder{font-size:1.3rem}
+}
 #list.list-view{grid-template-columns:1fr;gap:0;background:var(--card);border-radius:14px;overflow:hidden}
-#list.list-view .card{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:0;border-bottom:1px solid var(--line);box-shadow:none}
+#list.list-view .card{display:flex;flex-direction:row;align-items:center;gap:10px;padding:10px 14px;border-radius:0;border-bottom:1px solid var(--line);box-shadow:none}
 #list.list-view .card:last-child{border-bottom:none}
 #list.list-view .card:hover,#list.list-view .card:active{transform:none}
 #list.list-view .meta{padding:0;flex:1}
@@ -74,8 +88,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(10px);background:rgba(28,28,30,.92);color:#fff;padding:11px 20px;border-radius:14px;font-size:.88rem;font-weight:500;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:20}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 @media (pointer:coarse){#selectToggle{display:none}}
-@media (min-width:700px){main{max-width:1100px}.grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}}
-@media (min-width:1100px){main{max-width:1320px}.grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}}
+@media (min-width:700px){main{max-width:920px}}
 </style>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0a84ff">
@@ -553,6 +566,7 @@ function render(){
   document.getElementById('itemCount').textContent = items.length? items.length+' articol'+(items.length===1?'o':'i') : '';
   document.getElementById('clearSearch').style.display = document.getElementById('search').value? 'block':'none';
   document.getElementById('list').classList.toggle('list-view', layoutMode==='list');
+  document.getElementById('list').classList.toggle('uniform', layoutMode!=='list' && !(seriesMode && expandedSeries));
   document.getElementById('selectBar').style.display = selectMode? 'flex':'none';
   document.getElementById('selCount').textContent = selectedIds.size? `${selectedIds.size} selezionati` : 'Tocca le card per selezionarle';
   const activeFilters=(currentType!=='Tutti'?1:0)+(currentStatus!=='Tutti'?1:0)+(document.getElementById('genreFilter').value?1:0)+(document.getElementById('publisherFilter').value?1:0)+(document.getElementById('onlyCoverFilter').checked?1:0)+(document.getElementById('onlyFavFilter').checked?1:0);
@@ -578,7 +592,7 @@ function renderCard(i){
   const mode=document.getElementById('displayMode').value;
   const el=document.createElement('div');
   el.className='card';
-  const initial=(i.title||'?').trim()[0]?.toUpperCase()||'?';
+  const initial=(seriesOf(i)||i.title||'?').trim()[0]?.toUpperCase()||'?';
   const coverHtml = i.coverUrl
     ? `<img class="cover" src="${i.coverUrl}" alt="">`
     : `<div class="cover placeholder" style="background-color:${cfg().typeColors[i.type]||'#3c6e57'}">${initial}</div>`;
@@ -623,9 +637,9 @@ function renderCard(i){
     el.innerHTML=`${coverHtml}${topBtn}
       <div class="meta">${titleHtml}
       <div class="s">${esc(i.author||'')}</div>
-      <span class="tag"><span class="dot" style="background:${cfg().typeColors[i.type]||'var(--accent)'}"></span>${esc(i.type||'')}${i.genre?' · '+esc(i.genre):''}</span>
-      ${i.volumeNumber?`<span class="tag">📖 Vol. ${padVol(i.volumeNumber,i.totalVolumes)}${i.totalVolumes?'/'+i.totalVolumes:''}</span>`:(cfg().seriesTypes.includes(i.type)&&((i.volumes&&i.volumes.length)||i.totalVolumes)?`<span class="tag">📚 ${(i.volumes||[]).length}${i.totalVolumes?'/'+i.totalVolumes:''} volumi</span>`:'')}
-      <button class="tag stamp" onclick="cycleStatus('${i.id}','${i.status||cfg().statusOptions[0]}',event)" style="cursor:pointer;background:${i.status===cfg().statusOptions[2]?'rgba(52,199,89,.15)':i.status===cfg().statusOptions[1]?'rgba(255,149,0,.15)':'var(--bg)'};color:${i.status===cfg().statusOptions[2]?'var(--good)':i.status===cfg().statusOptions[1]?'var(--warn)':'var(--sub)'}">${statusIcon} ${esc(i.status||cfg().statusOptions[0])} <span style="opacity:.6">⟳</span></button></div>`;
+      <span class="tag tg-type"><span class="dot" style="background:${cfg().typeColors[i.type]||'var(--accent)'}"></span>${esc(i.type||'')}${i.genre?' · '+esc(i.genre):''}</span>
+      ${i.volumeNumber?`<span class="tag">📖 Vol. ${padVol(i.volumeNumber,i.totalVolumes)}${i.totalVolumes?'<span class="vtot">/'+i.totalVolumes+'</span>':''}</span>`:(cfg().seriesTypes.includes(i.type)&&((i.volumes&&i.volumes.length)||i.totalVolumes)?`<span class="tag">📚 ${(i.volumes||[]).length}${i.totalVolumes?'/'+i.totalVolumes:''} volumi</span>`:'')}
+      <button class="tag stamp" onclick="cycleStatus('${i.id}','${i.status||cfg().statusOptions[0]}',event)" style="cursor:pointer;background:${i.status===cfg().statusOptions[2]?'rgba(52,199,89,.15)':i.status===cfg().statusOptions[1]?'rgba(255,149,0,.15)':'var(--bg)'};color:${i.status===cfg().statusOptions[2]?'var(--good)':i.status===cfg().statusOptions[1]?'var(--warn)':'var(--sub)'}">${statusIcon}<span class="stext"> ${esc(i.status||cfg().statusOptions[0])} <span style="opacity:.6">⟳</span></span></button></div>`;
   }
   return el;
 }
