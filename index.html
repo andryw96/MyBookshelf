@@ -128,7 +128,6 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
     <option value="full">Copertina e dettagli</option>
     <option value="coverTitle">Copertina e titolo</option>
     <option value="cover">Solo copertina</option>
-    <option value="title">Solo titolo</option>
   </select>
   <button class="chip" id="selectToggle" onclick="toggleSelectMode()" style="flex:0 0 auto">☑️ Seleziona</button>
   <button class="chip" id="seriesToggle" onclick="toggleSeries()" style="flex:0 0 auto">📚 Per serie</button>
@@ -321,15 +320,15 @@ const WORKER_URL='https://mybookshelf.arxs32.workers.dev';
 let activeCatalog='books';
 function cfg(){ return CATALOGS[activeCatalog]; }
 function COL(){ return cfg().collection; }
-let db=null, sample=null, assets=null, downloadsCap=null, items=[], scanning=false, currentType='Tutti', currentStatus='Tutti', filterPanelOpen=false, seriesMode=false, layoutMode='grid', selectMode=false, selectedIds=new Set(), expandedSeries=null, coverFile=null, coverDataUrl=null, editingId=null, currentVolumes=[], scanTarget=null, loaded=false;
+let items=[], scanning=false, currentType='Tutti', currentStatus='Tutti', filterPanelOpen=false, seriesMode=false, layoutMode='grid', selectMode=false, selectedIds=new Set(), expandedSeries=null, coverFile=null, coverDataUrl=null, editingId=null, currentVolumes=[], scanTarget=null, loaded=false;
 
 // Versione standalone: nessuna capability Claude. I dati vivono nel browser (localStorage)
 // e la ricerca usa direttamente Google Books / Open Library / MusicBrainz.
 let pendingRemoteCover=null;
 
 const WEB_LINKS={
-  books:[['Amazon','https://www.amazon.it/s?k='],['IBS','https://www.ibs.it/search/?ts=as&query='],['Google','https://www.google.com/search?q=ISBN+'],['Open Library','https://openlibrary.org/isbn/'],['OPAC SBN','https://opac.sbn.it/','copy'],['Agenzia ISBN','https://www.isbn.it/','copy'],['NiceBooks','https://www.nicebooks.com/','copy']],
-  music:[['Amazon','https://www.amazon.it/s?k='],['Discogs','https://www.discogs.com/search/?type=release&q='],['Google','https://www.google.com/search?q=barcode+']]
+  books:[['Amazon','https://www.amazon.it/s?k='],['IBS','https://www.ibs.it/search/?ts=as&query='],['OPAC SBN','https://opac.sbn.it/','copy'],['Agenzia ISBN','https://www.isbn.it/','copy'],['NiceBooks','https://www.nicebooks.com/','copy']],
+  music:[['Amazon','https://www.amazon.it/s?k='],['Discogs','https://www.discogs.com/search/?type=release&q=']]
 };
 function renderWebLinks(){
   const box=document.getElementById('webLinks'); if(!box) return;
@@ -340,7 +339,6 @@ function openOnWeb(i){
   const code=document.getElementById('isbn').value.replace(/[^0-9Xx]/g,'');
   const link=WEB_LINKS[activeCatalog][i];
   if(!code){ setStatus('Inserisci prima un codice ISBN / barcode da cercare.'); return; }
-  if(link[0]==='Open Library' && !/^\d{10}$|^\d{9}[Xx]$|^\d{13}$/.test(code)){ setStatus('Open Library accetta solo codici ISBN completi.'); return; }
   if(link[2]==='copy'){
     // sito senza indirizzo di ricerca diretto verificato: copio il codice e apro il sito, tu lo incolli nella ricerca
     try{
@@ -417,18 +415,14 @@ function toggleSelect(id){
   render();
 }
 function clearSelection(){ selectedIds.clear(); render(); }
-async function deleteSelected(){
+function deleteSelected(){
   const ids=[...selectedIds];
   if(!ids.length){ toast('⚠️ Seleziona almeno un articolo prima di eliminare.'); return; }
   toast(`🗑️ Eliminazione di ${ids.length} articoli...`);
-  let ok=0, fail=0;
-  for(const id of ids){
-    if(db){ try{ await db.doc(COL()+'/'+id).delete(); ok++; }catch(e){ fail++; } }
-    else { items=items.filter(i=>i.id!==id); ok++; }
-  }
+  items=items.filter(i=>!selectedIds.has(i.id));
   selectedIds.clear();
-  if(!db){ updateGenreFilterOptions(); }
-  toast(fail? `🗑️ Eliminati ${ok}, ${fail} falliti` : `🗑️ Eliminati ${ok} articoli`);
+  updateGenreFilterOptions();
+  toast(`🗑️ Eliminati ${ids.length} articoli`);
   render();
 }
 function toggleSeries(){
@@ -629,8 +623,6 @@ function renderCard(i){
   const titleHtml=`${seriesHtml}<div class="t">${esc(i.title||'(senza titolo)')}</div>${subtitleHtml}`;
   if(mode==='cover'){
     el.innerHTML=`${coverHtml}${topBtn}`;
-  } else if(mode==='title'){
-    el.innerHTML=`<div class="meta">${titleHtml}<div class="s">${esc(i.author||'')}</div></div>${topBtn}`;
   } else if(mode==='coverTitle'){
     el.innerHTML=`${coverHtml}${topBtn}<div class="meta">${titleHtml}</div>`;
   } else {
@@ -690,7 +682,6 @@ function renderSeriesView(filtered,list){
   });
   singles.forEach(i=>list.appendChild(renderCard(i)));
 }
-function hashHue(s){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h;}
 window._donutData={};
 function donutFocus(elId,idx){
   const d=window._donutData[elId]; if(!d) return;
@@ -757,15 +748,11 @@ function renderDonut(elId, counts, emptyMsg, colorFn){
     </div>
   </div>`;
 }
-async function exportData(){
-  const data=JSON.stringify(items,null,2);
-  if(downloadsCap){ try{ await downloadsCap.save({filename:activeCatalog+'.json',data}); }catch(e){} }
-  else {
-    const blob=new Blob([data],{type:'application/json'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=activeCatalog+'.json';
-    document.body.appendChild(a); a.click(); a.remove();
-  }
+function downloadFile(name,data,type){
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([data],{type})); a.download=name;
+  document.body.appendChild(a); a.click(); a.remove();
 }
+function exportData(){ downloadFile(activeCatalog+'.json',JSON.stringify(items,null,2),'application/json'); }
 const IMP_FIELDS=[
  ['title','Titolo *',['titolo','title','nome','name','book title']],
  ['author','Autore',['autore','author','authors','autori']],
@@ -861,12 +848,10 @@ async function addItems(list){
   const st=document.getElementById('impStatus');
   for(let i=0;i<toAdd.length;i+=10){
     st.textContent=`Importazione in corso... ${ok}/${toAdd.length}`;
-    await Promise.all(toAdd.slice(i,i+10).map(async it=>{
-      if(db){ try{ await db.collection(COL()).add(it); ok++; }catch(e){ skip++; } }
-      else { items.unshift({id:'local'+Date.now()+Math.random(),...it}); ok++; }
-    }));
+    toAdd.slice(i,i+10).forEach(it=>{ items.unshift({id:'local'+Date.now()+Math.random(),...it}); ok++; });
+    await new Promise(r=>setTimeout(r));
   }
-  if(!db){ updateGenreFilterOptions(); render(); }
+  updateGenreFilterOptions(); render();
   st.textContent=`✅ Importati ${ok} articoli`+(skip?`, ${skip} saltati (duplicati o senza titolo)`:'')+'.';
 }
 function runImport(){
@@ -896,10 +881,8 @@ function readPaste(){
   startMapping(parseCSV(document.getElementById('impPasteText').value),'Dati incollati');
   document.getElementById('impPaste').style.display = impRows.length? 'none':'block';
 }
-async function downloadTemplate(){
-  const data='Titolo;Autore;ISBN;Editore;Genere;Tipo;Stato;Note;Volume;Volumi totali\nOne Piece;Eiichiro Oda;;Star Comics;Shonen;Manga;Letto;;1;\n';
-  if(downloadsCap){ try{ await downloadsCap.save({filename:'modello-'+activeCatalog+'.csv',data}); }catch(e){} }
-  else { const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([data],{type:'text/csv'})); a.download='modello-'+activeCatalog+'.csv'; document.body.appendChild(a); a.click(); a.remove(); }
+function downloadTemplate(){
+  downloadFile('modello-'+activeCatalog+'.csv','Titolo;Autore;ISBN;Editore;Genere;Tipo;Stato;Note;Volume;Volumi totali\nOne Piece;Eiichiro Oda;;Star Comics;Shonen;Manga;Letto;;1;\n','text/csv');
 }
 function esc(s){return (s+'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 
@@ -1191,18 +1174,15 @@ async function decodePhoto(ev, idx){
   else setStatus('⚠️ Non riesco a leggere il codice dalla foto. Riprova: inquadra solo il codice a barre, ben illuminato, tocca lo schermo per mettere a fuoco prima di scattare e tieni il telefono dritto.');
 }
 
-async function toggleFavorite(id, current, ev){
+function toggleFavorite(id, current, ev){
   ev.stopPropagation();
-  const next=!current;
-  if(db){ try{ await db.doc(COL()+'/'+id).update({favorite:next}); }catch(e){} }
-  else { items=items.map(i=>i.id===id?{...i,favorite:next}:i); render(); }
+  items=items.map(i=>i.id===id?{...i,favorite:!current}:i); render();
 }
-async function cycleStatus(id, current, ev){
+function cycleStatus(id, current, ev){
   ev.stopPropagation();
   const opts=cfg().statusOptions;
   const next=opts[(opts.indexOf(current||opts[0])+1)%opts.length];
-  if(db){ try{ await db.doc(COL()+'/'+id).update({status:next}); }catch(e){} }
-  else { items=items.map(i=>i.id===id?{...i,status:next}:i); render(); }
+  items=items.map(i=>i.id===id?{...i,status:next}:i); render();
   toast(`${cfg().statusIcons[next]} ${next}`);
 }
 function toast(msg){
@@ -1478,32 +1458,22 @@ async function save(){
       const vt = (v.title||'').trim();
       const vTitle = v.number ? `Vol. ${padVol(v.number,totalVolumes)}${vt?' - '+vt:''}` : (vt || title || serName);
       const data={...base, series:serName, title:vTitle, isbn:v.isbn||'', volumeNumber:v.number||null, totalVolumes, added:Date.now()};
-      if(db){ await db.collection(COL()).add(data); }
-      else { items.unshift({id:'local'+Date.now()+Math.random(), ...data}); }
+      items.unshift({id:'local'+Date.now()+Math.random(), ...data});
     }
-    if(editingId){
-      if(db){ await db.doc(COL()+'/'+editingId).delete(); }
-      else { items=items.filter(i=>i.id!==editingId); }
-    }
+    if(editingId) items=items.filter(i=>i.id!==editingId);
   } else {
     const data={...base, title, isbn:document.getElementById('isbn').value.trim(), added: existing ? existing.added : Date.now()};
     if(existing && existing.volumeNumber){ data.volumeNumber=existing.volumeNumber; data.totalVolumes=existing.totalVolumes||null; }
-    if(db){
-      if(editingId){ await db.doc(COL()+'/'+editingId).set(data); }
-      else { await db.collection(COL()).add(data); }
-    } else {
-      if(editingId){ items=items.map(i=>i.id===editingId?{id:editingId,...data}:i); }
-      else { items.unshift({id:'local'+Date.now(),...data}); }
-    }
+    if(editingId){ items=items.map(i=>i.id===editingId?{id:editingId,...data}:i); }
+    else { items.unshift({id:'local'+Date.now(),...data}); }
   }
-  if(!db){ updateGenreFilterOptions(); render(); }
+  updateGenreFilterOptions(); render();
   const n = isMultiVolume ? vols.length : 1;
   toast(editingId && !isMultiVolume ? '✅ Modifiche salvate' : n>1 ? `✅ Aggiunti ${n} volumi` : '✅ Aggiunto alla libreria');
   closeAdd();
 }
-async function del(id){
-  if(db){ await db.doc(COL()+'/'+id).delete(); }
-  else { items=items.filter(i=>i.id!==id); render(); }
+function del(id){
+  items=items.filter(i=>i.id!==id); render();
   toast('🗑️ Rimosso dalla libreria');
 }
 </script>
