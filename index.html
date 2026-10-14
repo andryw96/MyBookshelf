@@ -1318,26 +1318,24 @@ function inferBookInfo(o){
   if(!type && /graphic novel|fumett|\balbo\b|\bcomics?\b/.test(desc+' '+ttl)) type='Fumetto';
   if(!type && /\brivista\b|\bmagazine\b|\bmensile\b|\bperiodico\b/.test(desc+' '+ttl)) type='Rivista';
   if(!type && (cats||dw.type||pub||desc||o.title)) type='Libro';   // trovato qualcosa ma nessun segnale di fumetto/manga/rivista
-  // ---- genere ----
-  const found=[];
-  for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(cats) && !found.includes(name)) found.push(name); }
-  if(!found.length && wcats){ for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(wcats) && !found.includes(name)) found.push(name); } }
-  if(!found.length && wtxt){ for(const [re,name,strong] of BOOK_GENRE_RULES){ if(strong && re.test(wtxt) && !found.includes(name)) found.push(name); } }
-  if(!found.length && dw.genre && type!=='Manga' && type!=='Fumetto') found.push(dw.genre);
-  if(!found.length){
-    for(const [re,name,strong] of BOOK_GENRE_RULES){ if(strong && re.test(desc) && !found.includes(name)) found.push(name); }
-  }
+  // ---- genere: Wikipedia ha la priorità, poi le altre fonti ----
+  const found=[], add=n=>{ if(!found.includes(n)) found.push(n); };
+  if(wcats){ for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(wcats)) add(name); } }                       // 1. categorie Wikipedia
+  if(wtxt){ for(const [re,name,strong] of BOOK_GENRE_RULES){ if(strong && re.test(wtxt)) add(name); } }        // 2. prima frase Wikipedia
+  for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(cats)) add(name); }                                     // 3. Google Books / Open Library / SBN
+  if(!found.length && dw.genre && type!=='Manga' && type!=='Fumetto') add(dw.genre);
+  if(!found.length){ for(const [re,name,strong] of BOOK_GENRE_RULES){ if(strong && re.test(desc)) add(name); } }
   if(!found.length && (type==='Manga'||type==='Fumetto')){
     // nei fumetti anche le parole "deboli" della trama sono un indizio ragionevole
-    for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(desc) && !found.includes(name)) found.push(name); }
+    for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(desc)) add(name); }
   }
   if(!found.length && (type==='Libro'||type==='Rivista')){
     const all=cats+' '+desc.slice(0,300);
-    const topic=(BOOK_TOPIC_RULES.find(([re])=>re.test(cats)||re.test(ttl))||[])[1];
-    if(/fiction|novel|romanz|literary|drama|stories|racconti|narrativa/.test(all) && !/nonfiction|non-fiction/.test(cats)) found.push('Romanzo');
-    else if(topic){ found.push('Saggistica'); found.push(topic); }
-    else if(/true-c|political|social|self-help|nonfiction|saggi|politic|educat|health|salute|manual/.test(all)) found.push('Saggistica');
-    else if(type==='Libro') found.push('Romanzo');   // ultima ipotesi per i libri senza altri indizi: l'utente può cambiarla
+    const topic=(BOOK_TOPIC_RULES.find(([re])=>re.test(wcats)||re.test(cats)||re.test(ttl))||[])[1];
+    if(/fiction|novel|romanz|literary|drama|stories|racconti|narrativa/.test(all) && !/nonfiction|non-fiction/.test(cats)) add('Romanzo');
+    else if(topic){ add('Saggistica'); add(topic); }
+    else if(/true-c|political|social|self-help|nonfiction|saggi|politic|educat|health|salute|manual/.test(all)) add('Saggistica');
+    else if(type==='Libro') add('Romanzo');   // ultima ipotesi per i libri senza altri indizi: l'utente può cambiarla
   }
   return {type, genre:found.slice(0,2).join(', ')};
 }
@@ -1361,10 +1359,12 @@ const MUSIC_GENRE_RULES=[
   [/gospel/,'Gospel'],
   [/\bpop\b/,'Pop']
 ];
-function inferMusicGenres(tags){
-  const t=(tags||[]).join(' | ').toLowerCase();
+function inferMusicGenres(tags,priorityTags){
   const found=[];
-  for(const [re,name] of MUSIC_GENRE_RULES){ if(re.test(t) && !found.includes(name)) found.push(name); }
+  for(const list of [priorityTags||[], tags||[]]){            // prima Wikipedia, poi MusicBrainz / Discogs
+    const t=list.join(' | ').toLowerCase();
+    for(const [re,name] of MUSIC_GENRE_RULES){ if(re.test(t) && !found.includes(name)) found.push(name); }
+  }
   return found.slice(0,2).join(', ');
 }
 
@@ -1530,7 +1530,7 @@ async function lookupMusic(value, isBarcode){
       }catch(e){}
       try{
         const w=await srcWikipedia(rel.title, out.author, 'album');
-        if(w){ out.genreTags=(out.genreTags||[]).concat(w.categories); out.source='MusicBrainz + Wikipedia'; }
+        if(w){ out.wikiTags=w.categories; out.source='MusicBrainz + Wikipedia'; }
       }catch(e){}
       return out;
     }
@@ -1569,7 +1569,7 @@ async function searchGeneric(value, isCodeOnly){
       }
       // genere (e tipo, per i libri) riconosciuti dalle categorie trovate online
       let genre='', type='';
-      if(activeCatalog==='music'){ genre=inferMusicGenres(out.genreTags); }
+      if(activeCatalog==='music'){ genre=inferMusicGenres(out.genreTags,out.wikiTags); }
       else { const inf=inferBookInfo(out); genre=inf.genre; type=inf.type; }
       const gEl=document.getElementById('genre');
       if(genre && !gEl.value.trim()) gEl.value=genre;
