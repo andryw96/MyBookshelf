@@ -293,7 +293,7 @@ const CATALOGS={
     genresByType:{
       'Fumetto':['Supereroi','Azione','Avventura','Umoristico','Fantasy','Fantascienza','Horror'],
       'Manga':['Shonen','Shojo','Seinen','Josei','Azione','Romantico','Fantasy','Horror'],
-      'Libro':['Romanzo','Giallo','Fantasy','Fantascienza','Saggistica','Biografia','Storico','Horror'],
+      'Libro':['Romanzo','Giallo','Fantasy','Fantascienza','Horror','Storico','Biografia','Poesia','Ragazzi','Saggistica','Filosofia','Psicologia','Scienza','Arte','Cucina','Viaggi'],
       'Rivista':['Attualità','Tecnologia','Sport','Moda','Fumetteria']
     },
     statusOptions:['Da leggere','In lettura','Letto'],
@@ -1209,41 +1209,102 @@ const BOOK_GENRE_RULES=[
   [/shojo|sh[oō]jo|shoujo/,'Shojo',1],
   [/seinen/,'Seinen',1],
   [/josei/,'Josei',1],
-  [/superhero|super-hero|supereroi/,'Supereroi',1],
-  [/science fiction|sci-?fi|fantascienza/,'Fantascienza',1],
+  [/superhero|super-hero|supereroi|supereroe/,'Supereroi',1],
+  [/science fiction|sci-?fi|fantascienza|fantascientific/,'Fantascienza',1],
   [/dystopi|distopi/,'Distopico',1],
-  [/fantasy|fantastico/,'Fantasy',1],
-  [/horror/,'Horror',1],
-  [/mystery|detective|thriller|giallo|noir/,'Giallo',1],
-  [/crime|suspense/,'Giallo',0],
-  [/romance|romantic/,'Romantico',0],
-  [/biograph|autobiograph|memoir|biografi/,'Biografia',1],
-  [/histor|storic/,'Storico',0],
+  [/fantasy|fantastic/,'Fantasy',1],
+  [/horror|terrore/,'Horror',1],
+  [/mystery|detective|thriller|giallo|gialli|noir|poliziesc/,'Giallo',1],
+  [/crime|suspense|investigat/,'Giallo',0],
+  [/romance|romantic|sentimental|storie d'amore|love stor/,'Romantico',0],
+  [/biograph|autobiograph|memoir|biografi|autobiografi/,'Biografia',1],
+  [/histor|storic|storia\b/,'Storico',0],
   [/satir/,'Satira',0],
-  [/humou?r|comedy|umoristic|comic fiction/,'Umoristico',0],
+  [/humou?r|comedy|umoristic|comic fiction|comico|commedia/,'Umoristico',0],
   [/adventure|avventur/,'Avventura',0],
   [/\baction\b|azione/,'Azione',0],
   [/classics?\b|classici/,'Classici',0],
-  [/fairy tale|fiaba|fiabe|favol/,'Fiabe',0]
+  [/fairy tale|fiaba|fiabe|favol/,'Fiabe',0],
+  [/poetry|poesi|poem\b|poems\b|poemi/,'Poesia',1],
+  [/juvenile|young adult|ragazz|bambin|children|per l'infanzia/,'Ragazzi',0]
 ];
+// Argomenti di saggistica: usati quando il libro non è narrativa
+const BOOK_TOPIC_RULES=[
+  [/cooking|cucina|ricett|gastronom/,'Cucina'],
+  [/philosoph|filosof/,'Filosofia'],
+  [/psycholog|psicolog/,'Psicologia'],
+  [/\bart\b|arte\b|pittur|fotograf|architettur|design/,'Arte'],
+  [/travel|viagg|guide/,'Viaggi'],
+  [/science|scienz|mathemat|matematic|physic|fisic|biolog|nature|natura|medical|medicin/,'Scienza'],
+  [/computers|technolog|tecnolog|informatic|programm/,'Tecnologia'],
+  [/business|econom|management|finanz/,'Economia'],
+  [/religio|spiritual|teolog/,'Religione'],
+  [/music|musica/,'Musica'],
+  [/sports|sport\b|calcio/,'Sport']
+];
+const MANGA_PUBLISHERS=/star comics|j-?pop|planet manga|goen\b|dynit|flashbook|ronin manga|magic press|toshokan|hikari|kappa edizioni|kodansha|shueisha|shogakukan|kadokawa|square enix|akita shoten|manga 1|dokusho|jpop|panini manga|yamato/;
+const COMIC_PUBLISHERS=/bonelli|panini comics|marvel|dc comics|lion\b|rw edizioni|rw-lion|saldapress|bao publishing|tunu[eè]|coconino|001 edizioni|shockdom|becco giallo|renoir|mondadori comics|sergio bonelli|edizioni bd|bd edizioni|cosmo|il mulino a vento|oblomov|eris edizioni|round robin|fandango libri|hazard|nicola pesce|edizioni star|disney|topolino|glenat|dargaud|casterman|image comics|dark horse|idw|vertigo/;
+// Dewey: restituisce {type,genre} (anche parziali) a partire dalla classificazione SBN
+function inferFromDewey(dw){
+  const d=String(dw||''); const m=d.match(/^\s*(\d{1,3})(?:\.(\d+))?/); if(!m) return {};
+  const cls=m[1], dec=m[2]||''; const txt=d.toLowerCase(); const out={};
+  if(cls==='741' && dec.startsWith('5')){ out.type = dec.startsWith('595')? 'Manga':'Fumetto'; return out; }
+  if(cls[0]==='8'){
+    out.type='Libro';
+    if(/poesia|poetry/.test(txt)) out.genre='Poesia';
+    else if(/teatro|drama/.test(txt)) out.genre='Teatro';
+    else if(/narrativa|fiction/.test(txt)) out.genre='Romanzo';
+    else if(/saggi|critica|letteratura/.test(txt)) out.genre='Saggistica';
+    return out;
+  }
+  out.type='Libro';
+  if(cls[0]==='9') out.genre = /storia|history/.test(txt)? 'Storico':'Saggistica';
+  else if(cls==='641') out.genre='Cucina';
+  else if(cls[0]==='1') out.genre = cls[0]==='1' && /^(15)/.test(cls)? 'Psicologia':'Filosofia';
+  else if(cls[0]==='2') out.genre='Religione';
+  else if(cls[0]==='5') out.genre='Scienza';
+  else if(cls[0]==='6') out.genre='Tecnologia';
+  else if(cls[0]==='7') out.genre= cls==='780'||cls.startsWith('78')? 'Musica':'Arte';
+  else if(cls[0]==='3'||cls[0]==='4') out.genre='Saggistica';
+  return out;
+}
 function inferBookInfo(o){
   const cats=(o.categories||[]).join(' | ').toLowerCase().replace(/true crime/g,'true-c');
-  const desc=String(o.description||'').slice(0,700).toLowerCase();
+  const desc=String(o.description||'').slice(0,900).toLowerCase();
   const pub=String(o.publisher||'').toLowerCase();
+  const ttl=String(o.title||'').toLowerCase();
+  const dw=inferFromDewey(o.dewey);
+  // ---- tipo ----
   let type='';
   if(/manga/.test(cats)) type='Manga';
-  else if(/comics|comic books?|graphic novel|fumett|comic strip/.test(cats)) type='Fumetto';
+  else if(/comics|comic books?|graphic novel|fumett|comic strip|vignett/.test(cats)) type='Fumetto';
   else if(/periodical|magazine|rivist/.test(cats)) type='Rivista';
-  else if(cats) type='Libro';
-  if(!type && /planet manga|j-?pop|goen|dynit|star comics/.test(pub)) type='Manga';
+  if(type==='Fumetto' && (dw.type==='Manga' || MANGA_PUBLISHERS.test(pub) || /\bmanga\b|mangaka/.test(desc+' '+ttl))) type='Manga';   // categoria generica "comics" ma segnali giapponesi
+  if(!type && dw.type && dw.type!=='Libro') type=dw.type;
+  if(!type && MANGA_PUBLISHERS.test(pub)) type='Manga';
+  if(!type && COMIC_PUBLISHERS.test(pub)) type='Fumetto';
+  if(!type && /\bmanga\b|mangaka|shonen|shojo|seinen/.test(desc+' '+ttl)) type='Manga';
+  if(!type && /graphic novel|fumett|\balbo\b|\bcomics?\b/.test(desc+' '+ttl)) type='Fumetto';
+  if(!type && /\brivista\b|\bmagazine\b|\bmensile\b|\bperiodico\b/.test(desc+' '+ttl)) type='Rivista';
+  if(!type && (cats||dw.type||pub||desc||o.title)) type='Libro';   // trovato qualcosa ma nessun segnale di fumetto/manga/rivista
+  // ---- genere ----
   const found=[];
   for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(cats) && !found.includes(name)) found.push(name); }
+  if(!found.length && dw.genre && type!=='Manga' && type!=='Fumetto') found.push(dw.genre);
   if(!found.length){
     for(const [re,name,strong] of BOOK_GENRE_RULES){ if(strong && re.test(desc) && !found.includes(name)) found.push(name); }
   }
-  if(!found.length){
-    if(/fiction|novel|romanz|literary|drama|stories/.test(cats+' '+desc.slice(0,200))) found.push('Romanzo');
-    else if(/true-c|political|philosoph|psycholog|social|business|econom|self-help|religion|science|nature|technology|computers|education|health|cooking|\bart\b|music|travel|sports|nonfiction|saggi|politic|medical|mathematics/.test(cats)) found.push('Saggistica');
+  if(!found.length && (type==='Manga'||type==='Fumetto')){
+    // nei fumetti anche le parole "deboli" della trama sono un indizio ragionevole
+    for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(desc) && !found.includes(name)) found.push(name); }
+  }
+  if(!found.length && (type==='Libro'||type==='Rivista')){
+    const all=cats+' '+desc.slice(0,300);
+    const topic=(BOOK_TOPIC_RULES.find(([re])=>re.test(cats)||re.test(ttl))||[])[1];
+    if(/fiction|novel|romanz|literary|drama|stories|racconti|narrativa/.test(all) && !/nonfiction|non-fiction/.test(cats)) found.push('Romanzo');
+    else if(topic){ found.push('Saggistica'); found.push(topic); }
+    else if(/true-c|political|social|self-help|nonfiction|saggi|politic|educat|health|salute|manual/.test(all)) found.push('Saggistica');
+    else if(type==='Libro') found.push('Romanzo');   // ultima ipotesi per i libri senza altri indizi: l'utente può cambiarla
   }
   return {type, genre:found.slice(0,2).join(', ')};
 }
@@ -1291,69 +1352,77 @@ function pickGoogleVolume(items){
   }
   return {v:first, categories:cats, description:desc};
 }
-async function olSubjectsByIsbn(code){
-  try{
-    const r=await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:'+encodeURIComponent(code)+'&format=json&jscmd=data');
-    const d=await r.json(); const b=d['ISBN:'+code];
-    return (b && b.subjects)? b.subjects.map(x=>x.name||x).slice(0,25) : [];
-  }catch(e){ return []; }
-}
 function googleResult(it, cats, desc){
   return { title:it.title, author:(it.authors||[]).join(', '), publisher:it.publisher||'',
     isbn:((it.industryIdentifiers||[])[0]||{}).identifier||'',
     coverUrl: it.imageLinks && (it.imageLinks.thumbnail||it.imageLinks.smallThumbnail) || null,
     categories:cats, description:desc };
 }
+function fetchJson(url,ms){
+  const ac=new AbortController(); const t=setTimeout(()=>ac.abort(),ms||9000);
+  return fetch(url,{signal:ac.signal}).then(async r=>({status:r.status,data:await r.json().catch(()=>null)})).finally(()=>clearTimeout(t));
+}
+function cleanPublisher(t){
+  t=String(t||'').replace(/\s+/g,' ').trim();
+  t=t.replace(/[,\s]*[\[(]?\b(1[5-9]\d\d|20\d\d)\b[\])]?\s*$/,'');
+  if(t.includes(':')) t=t.split(':').slice(1).join(':');
+  return t.split(';')[0].replace(/[,.\s]+$/,'').trim();
+}
+async function srcGoogle(value,isIsbn,code){
+  try{
+    const q=isIsbn? 'isbn:'+code : value;
+    let {status,data}=await fetchJson('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults='+(isIsbn?1:5)+googleKeyParam());
+    if(status===429) googleBooksLimited=true;
+    let p=pickGoogleVolume(data&&data.items);
+    if(!p && isIsbn){   // alcuni ISBN italiani si trovano solo come testo libero
+      const r2=await fetchJson('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(code)+'&maxResults=1'+googleKeyParam());
+      if(r2.status===429) googleBooksLimited=true;
+      p=pickGoogleVolume(r2.data&&r2.data.items);
+    }
+    if(!p) return null;
+    const out=googleResult(p.v,p.categories,p.description); out.source='Google Books'; return out;
+  }catch(e){ return null; }
+}
+async function srcOpenLibrary(value,isIsbn,code){
+  try{
+    if(isIsbn){
+      const {data}=await fetchJson('https://openlibrary.org/api/books?bibkeys=ISBN:'+encodeURIComponent(code)+'&format=json&jscmd=data');
+      const b=data&&data['ISBN:'+code]; if(!b) return null;
+      return { source:'Open Library', title:b.title, author:(b.authors||[]).map(a=>a.name).join(', '), publisher:(b.publishers||[]).map(p=>p.name).join(', '), isbn:code,
+        coverUrl:b.cover&&(b.cover.medium||b.cover.small)||null, categories:(b.subjects||[]).map(x=>x.name||x).slice(0,25) };
+    }
+    const {data}=await fetchJson('https://openlibrary.org/search.json?q='+encodeURIComponent(value)+'&limit=1');
+    const b=data&&data.docs&&data.docs[0]; if(!b) return null;
+    return { source:'Open Library', title:b.title, author:(b.author_name||[]).join(', '), publisher:(b.publisher||[])[0]||'',
+      coverUrl:b.cover_i?('https://covers.openlibrary.org/b/id/'+b.cover_i+'-M.jpg'):null, categories:(b.subject||[]).slice(0,25) };
+  }catch(e){ return null; }
+}
 async function workerLookup(value,isIsbn,code){
   if(!WORKER_URL) return null;
   try{
-    const r=await fetch(WORKER_URL.replace(/\/$/,'')+'/?'+(isIsbn?'isbn='+encodeURIComponent(code):'q='+encodeURIComponent(value)));
-    const d=await r.json();
-    const list=(d.results||[]).filter(x=>x.title);
+    const {data}=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?'+(isIsbn?'isbn='+encodeURIComponent(code):'q='+encodeURIComponent(value)),12000);
+    const list=((data&&data.results)||[]).filter(x=>x.title);
     if(!list.length) return null;
     const best=list.find(x=>x.title&&x.author)||list[0];
-    const pub=list.find(x=>x.publisher);
-    const cover=list.find(x=>x.coverUrl);
-    return { title:best.title, author:best.author||'', publisher:best.publisher||(pub&&pub.publisher)||'',
-      isbn:best.isbn||(isIsbn?code:''), coverUrl:cover?cover.coverUrl:null, categories:[], description:'', source:best.source };
+    const pick=k=>{ const f=list.find(x=>x[k]); return f? f[k] : ''; };
+    const subj=[].concat(...list.map(x=>x.subjects||[]));
+    return { source:[...new Set(list.map(x=>x.source))].join(' + '), title:best.title, author:best.author||'', publisher:cleanPublisher(best.publisher||pick('publisher')),
+      isbn:best.isbn||(isIsbn?code:''), coverUrl:pick('coverUrl')||null, categories:subj, description:'', dewey:pick('dewey') };
   }catch(e){ return null; }
+}
+// unisce i risultati: per ogni campo vale il primo valore non vuoto (nell'ordine delle fonti)
+function mergeBook(list){
+  list=list.filter(x=>x&&(x.title||x.author)); if(!list.length) return null;
+  const first=k=>{ const f=list.find(x=>x[k]); return f? f[k] : ''; };
+  const cats=[...new Set([].concat(...list.map(x=>x.categories||[])))];
+  return { title:first('title'), author:first('author'), publisher:cleanPublisher(first('publisher')), isbn:first('isbn'),
+    coverUrl:first('coverUrl')||null, categories:cats, description:first('description'), dewey:first('dewey'),
+    source:[...new Set(list.map(x=>x.source).filter(Boolean))].join(' + ') };
 }
 async function lookupBook(value, isIsbn){
   const code=value.replace(/[^0-9Xx]/g,'');
-  try{
-    const q = isIsbn? 'isbn:'+code : value;
-    const r = await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults='+(isIsbn?1:5)+googleKeyParam());
-    if(r.status===429){ googleBooksLimited=true; }
-    const d = await r.json();
-    const p = pickGoogleVolume(d.items);
-    if(p){
-      let cats=p.categories;
-      if(!cats.length && isIsbn) cats=await olSubjectsByIsbn(code);
-      return googleResult(p.v, cats, p.description);
-    }
-  }catch(e){}
-  try{
-    if(isIsbn){
-      const r2=await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:'+encodeURIComponent(code)+'&format=json&jscmd=data');
-      const d2=await r2.json(); const b=d2['ISBN:'+code];
-      if(b) return { title:b.title, author:(b.authors||[]).map(a=>a.name).join(', '), publisher:(b.publishers||[]).map(p=>p.name).join(', '), isbn:code,
-        coverUrl:b.cover&&(b.cover.medium||b.cover.small)||null, categories:(b.subjects||[]).map(x=>x.name||x).slice(0,25) };
-    } else {
-      const r2=await fetch('https://openlibrary.org/search.json?q='+encodeURIComponent(value)+'&limit=1');
-      const d2=await r2.json(); const b=d2.docs&&d2.docs[0];
-      if(b) return { title:b.title, author:(b.author_name||[]).join(', '), publisher:(b.publisher||[])[0]||'',
-        coverUrl:b.cover_i?('https://covers.openlibrary.org/b/id/'+b.cover_i+'-M.jpg'):null, categories:(b.subject||[]).slice(0,25) };
-    }
-  }catch(e){}
-  if(isIsbn){
-    try{
-      const r3=await fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(value)+'&maxResults=1'+googleKeyParam());
-      if(r3.status===429) googleBooksLimited=true;
-      const d3=await r3.json(); const p3=pickGoogleVolume(d3.items);
-      if(p3) return googleResult(p3.v, p3.categories, p3.description);
-    }catch(e){}
-  }
-  return await workerLookup(value,isIsbn,code);
+  const r=await Promise.allSettled([srcGoogle(value,isIsbn,code), workerLookup(value,isIsbn,code), srcOpenLibrary(value,isIsbn,code)]);
+  return mergeBook(r.map(x=>x.status==='fulfilled'?x.value:null));
 }
 async function lookupMusic(value, isBarcode){
   try{
@@ -1401,7 +1470,7 @@ async function searchGeneric(value, isCodeOnly){
     if(out && (out.title||out.author)){
       if(out.title) document.getElementById('title').value = out.title;
       if(out.author) document.getElementById('author').value = out.author;
-      if(out.publisher) document.getElementById('publisher').value = out.publisher;
+      if(out.publisher && !document.getElementById('publisher').value.trim()) document.getElementById('publisher').value = out.publisher;
       if(out.isbn && !document.getElementById('isbn').value.trim()) document.getElementById('isbn').value = out.isbn;
       // genere (e tipo, per i libri) riconosciuti dalle categorie trovate online
       let genre='', type='';
@@ -1417,7 +1486,10 @@ async function searchGeneric(value, isCodeOnly){
         const prev=document.getElementById('coverPreview'); prev.src=out.coverUrl; prev.style.display='block';
       }
       document.getElementById('aiHint').style.display='block';
-      setStatus('✅ Trovato online'+(out.source?' ('+out.source+')':'')+(gEl.value.trim()? '' : ' (genere non riconosciuto: scegline uno)')+', controlla i dati prima di salvare.');
+      const missing=[]; if(!document.getElementById('publisher').value.trim()) missing.push(activeCatalog==='music'?'etichetta':'editore');
+      if(!gEl.value.trim()) missing.push('genere');
+      const tp = activeCatalog==='music'? '' : ' · Tipo: '+document.getElementById('type').value;
+      setStatus('✅ Trovato online'+(out.source?' ('+out.source+')':'')+tp+(gEl.value.trim()?' · Genere: '+gEl.value.trim():'')+(missing.length? ' · Non trovati: '+missing.join(', ')+' (compilali a mano)' : '')+'. Controlla i dati prima di salvare.');
     } else if(googleBooksLimited){
       setStatus('⏳ Troppe ricerche in poco tempo (limite gratuito di Google Books). Riprova tra un minuto, o aggiungi una chiave API gratuita (vedi guida) per non avere più questo limite.');
     } else if(isCodeOnly){
