@@ -1402,7 +1402,7 @@ function pickGoogleVolume(items){
 function googleResult(it, cats, desc){
   return { title:it.title, author:(it.authors||[]).join(', '), publisher:it.publisher||'',
     isbn:((it.industryIdentifiers||[])[0]||{}).identifier||'',
-    coverUrl: it.imageLinks && (it.imageLinks.thumbnail||it.imageLinks.smallThumbnail) || null,
+    coverUrl: it.imageLinks && String(it.imageLinks.thumbnail||it.imageLinks.smallThumbnail||'').replace(/^http:/,'https:') || null,
     categories:cats, description:desc, year:(String(it.publishedDate||'').match(/\d{4}/)||[''])[0], language:it.language||'' };
 }
 function fetchJson(url,ms){
@@ -1418,7 +1418,9 @@ function cleanPublisher(t){
 async function srcGoogle(value,isIsbn,code){
   try{
     const q=isIsbn? 'isbn:'+code : value;
-    let {status,data}=await fetchJson('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults='+(isIsbn?1:5)+googleKeyParam());
+    const gurl='https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults='+(isIsbn?1:5)+googleKeyParam();
+    let {status,data}=await fetchJson(gurl);
+    if(status>=500){ await new Promise(r=>setTimeout(r,700)); ({status,data}=await fetchJson(gurl)); }   // Google risponde ogni tanto 503: un secondo tentativo
     if(status===429) googleBooksLimited=true;
     let p=pickGoogleVolume(data&&data.items);
     if(!p && isIsbn){   // alcuni ISBN italiani si trovano solo come testo libero
