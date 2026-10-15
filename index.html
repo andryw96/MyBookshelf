@@ -210,7 +210,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
   <input type="file" id="barcodePhotoVol" accept="image/*" capture="environment" style="position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0" onchange="decodePhoto(event,volPhotoIdx)">
   <small class="hint" id="aiHint" style="display:none">Dati trovati online: verifica sempre prima di salvare.</small>
   <div class="row" style="align-items:flex-start">
-    <input id="isbn" placeholder="Codice ISBN / barcode" style="flex:2">
+    <input id="isbn" placeholder="Codice ISBN / barcode" style="flex:2" oninput="onIsbnInput()">
     <button class="ghost" style="flex:1;margin-top:5px" onclick="searchByIsbn()">🔍 Cerca</button>
   </div>
   <div id="webLinks" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-4px 0 10px"></div>
@@ -892,6 +892,7 @@ function downloadTemplate(){
 function esc(s){return (s+'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 
 function openAdd(){
+  autoIsbnLast='';
   typeTouched=false;
   editingId=null;
   document.getElementById('sheetTitle').textContent='Aggiungi';
@@ -1113,7 +1114,8 @@ async function finishScan(code){
     return;
   }
   document.getElementById('isbn').value=code;
-  await searchGeneric(code, true);
+  autoIsbnLast=code;
+  searchByIsbn();
 }
 function stopScan(){
   scanning=false; scanBusy=false;
@@ -1199,7 +1201,19 @@ function toast(msg){
   clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),2200);
 }
 function setStatus(msg){ document.getElementById('searchStatus').textContent = msg; }
-let isbnWarn='';
+let isbnWarn='', autoIsbnLast='', autoIsbnTimer=null, workerNote='';
+// Ricerca automatica: appena nel campo c'è un ISBN completo e valido (digitato o incollato) parte da sola
+function onIsbnInput(){
+  clearTimeout(autoIsbnTimer);
+  autoIsbnTimer=setTimeout(()=>{
+    const v=document.getElementById('isbn').value.trim();
+    if(!v || v===autoIsbnLast) return;
+    const complete = activeCatalog==='music' ? /^\d{12,13}$/.test(v.replace(/[\s-]/g,'')) : isbnInfo(v).valid;
+    if(!complete) return;
+    if(document.getElementById('title').value.trim()) return;      // non sovrascrivere un titolo già scritto
+    autoIsbnLast=v; searchByIsbn();
+  },700);
+}
 function isbnInfo(raw){
   const s=String(raw||'').replace(/^isbn(-1[03])?:?/i,'').replace(/[\s\-–—]/g,'').toUpperCase();
   const w13=d=>(10-([...d.slice(0,12)].reduce((a,c,i)=>a+ +c*(i%2?3:1),0)%10))%10;
@@ -1492,12 +1506,13 @@ async function srcWikipedia(title,author,hint){
 async function workerWaterfall(isbn13){
   if(!WORKER_URL) return null;
   try{
-    const {data}=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?isbn='+encodeURIComponent(isbn13),20000);
-    const b=data&&data.book; if(!b||!b.title) return null;
+    const {status,data}=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?isbn='+encodeURIComponent(isbn13),20000);
+    const b=data&&data.book;
+    if(!b||!b.title){ workerNote = (data&&data.error) || ('risposta '+status); return null; }
     return { title:b.title, author:(b.authors||[]).join(', '), publisher:b.publisher||'', isbn:b.isbn13||isbn13, coverUrl:b.coverUrl||null,
       categories:b.genres||[], description:b.description||'', dewey:b.dewey||'', wikiCats:b.wikiCats||[], wikiText:b.wikiText||'',
       year:b.year||'', language:b.language||'', source:(data.sources||[]).join(' + ') };
-  }catch(e){ return null; }
+  }catch(e){ workerNote = e&&e.name==='AbortError' ? 'nessuna risposta entro 20 secondi' : 'non raggiungibile ('+(e&&e.message||'errore di rete')+')'; return null; }
 }
 async function lookupBook(value, isIsbn){
   const code=value.replace(/[^0-9Xx]/g,'');
@@ -1553,6 +1568,7 @@ async function lookupMusic(value, isBarcode){
 }
 async function searchGeneric(value, isCodeOnly){
   setStatus('🔎 Ricerca online in corso...');
+  workerNote='';
   googleBooksLimited=false;
   try{
     const out = activeCatalog==='music'? await lookupMusic(value,isCodeOnly) : await lookupBook(value,isCodeOnly);
@@ -1588,7 +1604,7 @@ async function searchGeneric(value, isCodeOnly){
     } else if(googleBooksLimited){
       setStatus('⏳ Troppe ricerche in poco tempo (limite gratuito di Google Books). Riprova tra un minuto, o aggiungi una chiave API gratuita (vedi guida) per non avere più questo limite.');
     } else if(isCodeOnly){
-      setStatus('⚠️ '+isbnWarn+'Nessun risultato per questo codice. Prova a cercare anche per titolo.');
+      setStatus('⚠️ '+isbnWarn+'Nessun risultato per questo codice. Prova a cercare anche per titolo.'+(workerNote?' (Servizio di ricerca: '+workerNote+')':''));
     } else {
       setStatus('⚠️ Nessun risultato trovato online: compila i dati a mano.');
     }
