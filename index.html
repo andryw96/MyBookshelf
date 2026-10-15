@@ -1334,6 +1334,7 @@ function inferBookInfo(o){
   if(!type && (cats||dw.type||pub||desc||o.title)) type='Libro';   // trovato qualcosa ma nessun segnale di fumetto/manga/rivista
   // ---- genere: Wikipedia ha la priorità, poi le altre fonti ----
   const found=[], add=n=>{ if(!found.includes(n)) found.push(n); };
+  for(const g of (o.wikiGenres||[])){ if(!/^(Manga|Fumetto|Libro|Rivista)$/.test(g)) add(g); }                    // 0. infobox + introduzione Wikipedia (estrattore)
   if(wcats){ for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(wcats)) add(name); } }                       // 1. categorie Wikipedia
   if(wtxt){ for(const [re,name,strong] of BOOK_GENRE_RULES){ if(strong && re.test(wtxt)) add(name); } }        // 2. prima frase Wikipedia
   for(const [re,name] of BOOK_GENRE_RULES){ if(re.test(cats)) add(name); }                                     // 3. Google Books / Open Library / SBN
@@ -1351,7 +1352,7 @@ function inferBookInfo(o){
     else if(/true-c|political|social|self-help|nonfiction|saggi|politic|educat|health|salute|manual/.test(all)) add('Saggistica');
     else if(type==='Libro') add('Romanzo');   // ultima ipotesi per i libri senza altri indizi: l'utente può cambiarla
   }
-  return {type, genre:found.slice(0,2).join(', ')};
+  return {type, genre:found.slice(0,(o.wikiGenres||[]).length?4:2).join(', ')};
 }
 const MUSIC_GENRE_RULES=[
   [/hip.?hop|\brap\b|trap/,'Hip Hop'],
@@ -1477,6 +1478,88 @@ function authorSurname(a){
   a=String(a||'').split(/[;&]| e /)[0].trim(); if(!a) return '';
   return a.includes(',')? a.split(',')[0].trim() : a.split(/\s+/).slice(-1)[0];
 }
+// ───────── Estrattore semantico di generi da una pagina Wikipedia (wikitext sezione 0) ─────────
+// Vocabolario: [regex, forma italiana canonica]. Solo ciò che è esplicitamente nel testo viene estratto.
+const WG_VOCAB = [
+  [/sh[oō]+u?nen|sh[oō]nen/i, 'Shonen'], [/sh[oō]+u?jo|sh[oō]jo/i, 'Shojo'], [/seinen/i, 'Seinen'], [/josei/i, 'Josei'], [/kodomo/i, 'Kodomo'],
+  [/spokon/i, 'Spokon'], [/sportiv|\bsport\b/i, 'Sportivo'], [/mecha/i, 'Mecha'], [/isekai/i, 'Isekai'], [/slice of life|vita quotidiana/i, 'Slice of life'],
+  [/scolastic|ambientazione scolastica|school life/i, 'Scolastico'], [/harem/i, 'Harem'], [/yaoi|boys.? love/i, 'Yaoi'], [/yuri|girls.? love/i, 'Yuri'],
+  [/fantascien|science fiction|sci-?fi/i, 'Fantascienza'], [/post.?apocalitt/i, 'Post-apocalittico'], [/distopi/i, 'Distopico'], [/cyberpunk/i, 'Cyberpunk'],
+  [/fantasy|fantastic/i, 'Fantasy'], [/horror|orrore/i, 'Horror'], [/gotico/i, 'Gotico'], [/thriller/i, 'Thriller'], [/noir/i, 'Noir'],
+  [/giallo\s+deduttiv|detective story|deduttiv/i, 'Giallo deduttivo'], [/\bgiall[oi]\b|poliziesc|mystery|crime/i, 'Giallo'],
+  [/supereroi|superhero|supereroistic/i, 'Supereroi'], [/romantic|sentimental|romance/i, 'Romantico'], [/commedia|comico|umoristic|umorismo|comedy/i, 'Umoristico'],
+  [/satir/i, 'Satira'], [/avventur/i, 'Avventura'], [/\bazione\b|action/i, 'Azione'], [/storic/i, 'Storico'], [/biograf/i, 'Biografico'],
+  [/drammatic|\bdramma\b|drama/i, 'Drammatico'], [/psicologic/i, 'Psicologico'], [/sovrannaturale|soprannaturale|supernatural/i, 'Sovrannaturale'],
+  [/western/i, 'Western'], [/guerra|bellic|war\b/i, 'Guerra'], [/erotic/i, 'Erotico'], [/fiaba|fiabesc/i, 'Fiabesco'], [/educativ|formazione|bildungsroman/i, 'Formazione'],
+  [/autobiograf/i, 'Autobiografico'], [/saggistic|saggio/i, 'Saggistica'], [/poesia|poetic/i, 'Poesia'], [/musical/i, 'Musicale'],
+  [/cucina|gastronom|culinari/i, 'Gastronomico'], [/arti marziali/i, 'Arti marziali'], [/magic[oa]\b|magical girl|majokko/i, 'Magico'],
+];
+const WG_TARGETS = new Set(['Shonen', 'Shojo', 'Seinen', 'Josei', 'Kodomo']);
+function wgClean(s) {
+  return String(s || '').replace(/<ref[^>]*\/>/gi, '').replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '').replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<br\s*\/?>/gi, ', ').replace(/<[^>]+>/g, '').replace(/\{\{\s*(?:Nowrap|nobr)\s*\|([^{}]*)\}\}/gi, '$1')
+    .replace(/\{\{[^{}]*\}\}/g, '').replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1').replace(/'{2,}/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+// Estrae il blocco infobox bilanciando le graffe
+function wgInfobox(wt) {
+  const m = /\{\{\s*(Infobox|Fumetto|Libro|Opera letteraria|Anime e manga|Manga|Periodico|Rivista|Romanzo|Scheda)[^|{}\n]*/i.exec(wt); if (!m) return { name: '', body: '' };
+  let i = m.index, d = 0, j = i;
+  for (; j < wt.length; j++) { if (wt.startsWith('{{', j)) { d++; j++; } else if (wt.startsWith('}}', j)) { d--; j++; if (d === 0) { j++; break; } } }
+  return { name: m[0].replace(/^\{\{\s*/, '').trim(), body: wt.slice(i, j), end: j };
+}
+function wgFields(body) {
+  const out = {}; let depth = 0, cur = null, buf = '';
+  const flush = () => { if (cur) out[cur] = (out[cur] ? out[cur] + ', ' : '') + buf; cur = null; buf = ''; };
+  for (const line of body.split('\n')) {
+    const m = depth === 0 || true ? /^\s*\|\s*([^=|{}]+?)\s*=\s*(.*)$/.exec(line) : null;
+    if (m && !/^\s*\|\s*[^=]*\{\{/.test(line.split('=')[0])) { flush(); cur = m[1].toLowerCase(); buf = m[2]; }
+    else if (cur) buf += ' ' + line;
+  }
+  flush(); return out;
+}
+function wgCap(s) { s = s.trim(); return s ? s[0].toUpperCase() + s.slice(1) : s; }
+function wgSplitValue(v) {
+  const items = [];
+  for (const raw of wgClean(v).split(/\s*[,;/·•]\s*|\s+e\s+|\s+and\s+/i)) {
+    const t = raw.trim().replace(/[.:]+$/, ''); if (!t || t.length > 40 || /\d{3,}/.test(t)) continue;
+    const hit = WG_VOCAB.find(([re]) => re.test(t));
+    items.push(hit ? hit[1] : wgCap(t.toLowerCase()));
+  }
+  return items;
+}
+function wgType(name, text, hasTarget) {
+  const n = (name || '').toLowerCase();
+  if (/periodico|rivista/.test(n)) return 'Rivista';
+  const t = (text || '').slice(0, 400).toLowerCase();
+  if (/manga|anime/.test(n) || /\bmanga\b|mangaka/.test(t)) return 'Manga';
+  if (/fumett|comic|graphic novel/.test(n) || /\bfumett|graphic novel|\bcomics?\b|a fumetti/.test(t)) return /manga|\bgiappones/.test(t) ? 'Manga' : 'Fumetto';
+  if (/periodico|rivista/.test(n) || /\brivista\b|\bmagazine\b|\bperiodico\b|\bmensile\b|\bsettimanale\b/.test(t)) return 'Rivista';
+  if (/libro|opera letteraria|romanzo/.test(n) || /\bromanzo\b|\blibro\b|\braccolta\b|\bsaggio\b|\bnovel\b/.test(t)) return 'Libro';
+  return hasTarget ? 'Manga' : 'Sconosciuto';
+}
+// wikitext: contenuto della sezione 0 · title: titolo pagina → {titolo_opera, tipo_opera, generi}
+function extractWikiGenres(wikitext, title) {
+  const wt = String(wikitext || ''); const ib = wgInfobox(wt); const f = wgFields(ib.body);
+  const fromInfo = [], gKeys = ['genere', 'generi', 'sottogenere', 'sottogeneri', 'genre', 'genres'], tKeys = ['target', 'demografico', 'pubblico'];
+  for (const k of gKeys) if (f[k]) fromInfo.push(...wgSplitValue(f[k]));
+  const targets = []; for (const k of tKeys) if (f[k]) targets.push(...wgSplitValue(f[k]));
+  const introRaw = wt.slice(ib.end || 0); const intro = wgClean(introRaw.split(/\n==/)[0]).slice(0, 1500);
+  const fromIntro = []; for (const [re, name] of WG_VOCAB) if (re.test(intro)) fromIntro.push(name);
+  const tipo = wgType(ib.name, intro || wgClean(wt), targets.length > 0 || fromInfo.some(g => WG_TARGETS.has(g)));
+  let all = [...fromInfo, ...targets, ...fromIntro];
+  // Se l'infobox contiene i generi, dall'introduzione si prendono solo quelli menzionati come "genere"/target (evita rumore della trama)
+  if (fromInfo.length || targets.length) all = [...fromInfo, ...targets, ...fromIntro.filter(g => WG_TARGETS.has(g) || /(?:genere|sottogener|di tipo|\b(?:un|una)\s+(?:manga|fumetto|romanzo|serie)\s+\w*\s*)/i.test(intro))];
+  const seen = new Set(), generi = [];
+  if (tipo === 'Manga' || tipo === 'Fumetto') generi.push(tipo), seen.add(tipo);
+  for (const g of all) { const k = g.toLowerCase(); if (!seen.has(k.replace(/^./, c => c.toUpperCase())) && !seen.has(g)) { seen.add(g); generi.push(g); } }
+  return { titolo_opera: String(title || '').replace(/\s*\([^)]*\)\s*$/, ''), tipo_opera: tipo, generi };
+}
+
+async function wikiSection0(lang,title){
+  const {data}=await fetchJson('https://'+lang+'.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&origin=*&prop=revisions&rvprop=content&rvslots=main&rvsection=0&titles='+encodeURIComponent(title),6000);
+  const p=data&&data.query&&data.query.pages&&data.query.pages[0];
+  return (p&&p.revisions&&p.revisions[0]&&p.revisions[0].slots&&p.revisions[0].slots.main&&p.revisions[0].slots.main.content)||'';
+}
 async function wikiQuery(lang,q){
   const url='https://'+lang+'.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=0&gsrlimit=5&gsrsearch='+encodeURIComponent(q)+
     '&prop=extracts%7Ccategories&exintro=1&explaintext=1&exsentences=3&exlimit=5&cllimit=max&clshow=!hidden';
@@ -1498,7 +1581,8 @@ async function srcWikipedia(title,author,hint){
           const t=normTitle(pg.title); return t===nb || t.startsWith(nb+' ') || (nb.startsWith(t+' ') && t.length>=4); });
         if(hit){
           const cats=(hit.categories||[]).map(c=>c.title.replace(/^[^:]+:/,'')).filter(c=>!/wikipedia|pagine|voci |template|disambig|portale|collegament|articles|cs1|use dmy|short description/i.test(c));
-          return { source:'Wikipedia', lang, title:hit.title, categories:cats, extract:String(hit.extract||'').slice(0,500) };
+          let wg=null; try{ wg=extractWikiGenres(await wikiSection0(lang,hit.title),hit.title); }catch(e){}
+          return { source:'Wikipedia', lang, title:hit.title, categories:cats, extract:String(hit.extract||'').slice(0,500), wikiGenres:wg?wg.generi:[], wikiTipo:wg?wg.tipo_opera:'' };
         }
       }
     }
@@ -1512,7 +1596,7 @@ async function workerWaterfall(isbn13){
     const b=data&&data.book;
     if(!b||!b.title){ workerNote = (data&&data.error) || ('risposta '+status); return null; }
     return { title:b.title, author:(b.authors||[]).join(', '), publisher:b.publisher||'', isbn:b.isbn13||isbn13, coverUrl:b.coverUrl||null,
-      categories:b.genres||[], description:b.description||'', dewey:b.dewey||'', wikiCats:b.wikiCats||[], wikiText:b.wikiText||'',
+      categories:b.genres||[], description:b.description||'', dewey:b.dewey||'', wikiCats:b.wikiCats||[], wikiText:b.wikiText||'', wikiGenres:b.wikiGenres||[], wikiTipo:b.wikiTipo||'',
       year:b.year||'', language:b.language||'', source:(data.sources||[]).join(' + ') };
   }catch(e){ workerNote = e&&e.name==='AbortError' ? 'nessuna risposta entro 20 secondi' : 'non raggiungibile ('+(e&&e.message||'errore di rete')+')'; return null; }
 }
@@ -1523,7 +1607,7 @@ async function lookupBook(value, isIsbn){
   const m=mergeBook(r.map(x=>x.status==='fulfilled'?x.value:null));
   if(!m) return null;
   const w=await srcWikipedia(m.title,m.author,'');
-  if(w && (w.categories.length||w.extract)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.source=(m.source?m.source+' + ':'')+'Wikipedia'; }
+  if(w && (w.categories.length||w.extract)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.source=(m.source?m.source+' + ':'')+'Wikipedia'; }
   return m;
 }
 async function lookupMusic(value, isBarcode){
