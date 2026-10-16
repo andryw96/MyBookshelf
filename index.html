@@ -1510,7 +1510,7 @@ function wgInfobox(wt) {
 function wgFields(body) {
   const out = {}; let depth = 0, cur = null, buf = '';
   const flush = () => { if (cur) out[cur] = (out[cur] ? out[cur] + ', ' : '') + buf; cur = null; buf = ''; };
-  for (const line of body.split('\n')) {
+  for (const line of body.replace(/\}\}\s*$/, '').split('\n')) {
     const m = depth === 0 || true ? /^\s*\|\s*([^=|{}]+?)\s*=\s*(.*)$/.exec(line) : null;
     if (m && !/^\s*\|\s*[^=]*\{\{/.test(line.split('=')[0])) { flush(); cur = m[1].toLowerCase(); buf = m[2]; }
     else if (cur) buf += ' ' + line;
@@ -1600,8 +1600,68 @@ async function workerWaterfall(isbn13){
       year:b.year||'', language:b.language||'', source:(data.sources||[]).join(' + ') };
   }catch(e){ workerNote = e&&e.name==='AbortError' ? 'nessuna risposta entro 20 secondi' : 'non raggiungibile ('+(e&&e.message||'errore di rete')+')'; return null; }
 }
+
+// ───────── Ricerca per metadati (libri vintage / senza ISBN): Titolo + Autore + Editore + Anno ─────────
+const MD_STOP=new Set(['il','lo','la','i','gli','le','un','una','di','del','della','dei','delle','e','the','a','of','and']);
+const mdNorm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\(.*?\)/g,' ').replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
+const mdToks=s=>mdNorm(s).split(' ').filter(t=>t&&!MD_STOP.has(t));
+function mdJaccard(a,b){ const A=new Set(mdToks(a)),B=new Set(mdToks(b)); if(!A.size||!B.size) return 0; let i=0; A.forEach(t=>{ if(B.has(t)) i++; }); return i/(A.size+B.size-i); }
+function mdSurname(a){ const x=String(a||'').split(/[;&]| e /)[0].trim(); return mdNorm(x.includes(',')?x.split(',')[0]:x.split(/\s+/).pop()||''); }
+function mdScore(c,q){   // titolo 50% · autore 25% · anno 15% · editore 10%; i criteri non compilati non penalizzano
+  let got=0,max=0;
+  if(q.title){ max+=.5; got+=.5*Math.max(mdJaccard(c.title,q.title), mdNorm(c.title).startsWith(mdNorm(q.title))?.9:0); }
+  if(q.author){ max+=.25; const s=mdSurname(q.author); if(s && mdNorm(c.author).includes(s)) got+=.25; }
+  if(q.publisher){ max+=.1; if(mdJaccard(c.publisher,q.publisher)>0 || mdNorm(c.publisher).includes(mdNorm(q.publisher))) got+=.1; }
+  if(q.year && c.year){ max+=.15; const d=Math.abs(c.year-q.year); got+= d===0?.15 : d<=2?.1 : d<=10?.03 : 0; }
+  return max? got/max : 0;
+}
+async function mdCandidates(q){
+  const out=[];
+  // 1. OPAC SBN (via Worker)
+  if(WORKER_URL){ try{
+    const {data}=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?q='+encodeURIComponent([q.title,q.author].filter(Boolean).join(' ')),12000);
+    ((data&&data.results)||[]).forEach(r=>{ if(r.title) out.push({source:'OPAC SBN',stage:1,title:r.title,author:r.author||'',publisher:cleanPublisher(r.publisher||''),year:parseInt(r.year)||0,bid:r.bid||'',isbn:r.isbn||'',coverUrl:r.coverUrl||null}); });
+  }catch(e){} }
+  if(out.some(c=>mdScore(c,q)>=.85)) return out;
+  // 2. Google Books con intitle / inauthor / inpublisher
+  try{
+    const parts=[q.title&&'intitle:"'+q.title+'"', q.author&&'inauthor:"'+q.author+'"', q.publisher&&'inpublisher:"'+q.publisher+'"'].filter(Boolean).join('+');
+    const {data}=await fetchJson('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(parts).replace(/%2B/g,'+')+'&maxResults=10&printType=books'+(GOOGLE_BOOKS_KEY?'&key='+GOOGLE_BOOKS_KEY:''),9000);
+    ((data&&data.items)||[]).forEach(i=>{ const v=i.volumeInfo||{}; const id=(v.industryIdentifiers||[]).find(x=>x.type==='ISBN_13');
+      out.push({source:'Google Books',stage:2,title:[v.title,v.subtitle].filter(Boolean).join(': '),author:(v.authors||[]).join(', '),publisher:cleanPublisher(v.publisher||''),year:parseInt(String(v.publishedDate||'').slice(0,4))||0,
+        isbn:id?id.identifier:'',language:v.language||'',categories:v.categories||[],description:v.description||'',coverUrl:v.imageLinks&&v.imageLinks.thumbnail?String(v.imageLinks.thumbnail).replace(/^http:/,'https:').replace('&edge=curl',''):null}); });
+  }catch(e){}
+  if(out.some(c=>mdScore(c,q)>=.85)) return out;
+  // 3. Open Library Search
+  try{
+    const p=new URLSearchParams(); if(q.title)p.set('title',q.title); if(q.author)p.set('author',q.author); if(q.publisher)p.set('publisher',q.publisher);
+    p.set('limit','10'); p.set('fields','title,author_name,publisher,first_publish_year,publish_year,isbn,cover_i,subject,language');
+    const {data}=await fetchJson('https://openlibrary.org/search.json?'+p,9000);
+    ((data&&data.docs)||[]).forEach(x=>out.push({source:'Open Library',stage:3,title:x.title||'',author:(x.author_name||[]).join(', '),publisher:cleanPublisher((x.publisher||[])[0]||''),
+      year:(q.year&&(x.publish_year||[]).includes(q.year))?q.year:(x.first_publish_year||0),isbn:(x.isbn||[]).find(i=>i.length===13)||'',categories:(x.subject||[]).slice(0,10),
+      coverUrl:x.cover_i?'https://covers.openlibrary.org/b/id/'+x.cover_i+'-L.jpg':null}));
+  }catch(e){}
+  return out;
+}
+async function lookupByMetadata(q){
+  const THRESH=.6;
+  const ranked=(await mdCandidates(q)).map(c=>({c,s:mdScore(c,q)})).sort((a,b)=>b.s-a.s);
+  const ok=ranked.filter(x=>x.s>=THRESH).slice(0,3).map(x=>x.c);
+  if(!ok.length){ workerNote = ranked.length? 'nessun risultato abbastanza simile (miglior corrispondenza '+Math.round(ranked[0].s*100)+'%)' : 'nessun risultato'; return null; }
+  const pick=k=>{ const f=ok.find(c=>c[k]&&(!Array.isArray(c[k])||c[k].length)); return f? f[k] : ''; };
+  const m={ title:ok[0].title, author:((a)=>a.includes(',')?a.split(',').reverse().map(x=>x.trim()).join(' '):a)(ok[0].author||q.author||''), publisher:pick('publisher')||q.publisher||'', year:pick('year')||q.year||'', isbn:pick('isbn'), bid:pick('bid'),
+    language:pick('language'), coverUrl:pick('coverUrl')||null, categories:[].concat(...ok.map(c=>c.categories||[])), description:pick('description'), dewey:'',
+    source:[...new Set(ok.map(c=>c.source))].join(' + ')+' (per titolo/autore/editore/anno)' };
+  const w=await srcWikipedia(m.title.replace(/\s*[:–-]\s*.*$/,'')||m.title, m.author,'');
+  if(w && (w.categories.length||w.extract||(w.wikiGenres||[]).length)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.source+=' + Wikipedia'; }
+  return m;
+}
 async function lookupBook(value, isIsbn){
   const code=value.replace(/[^0-9Xx]/g,'');
+  if(!isIsbn){   // titolo + (autore | editore | anno) compilati → ricerca per metadati con punteggio di somiglianza
+    const q={title:value.trim(), author:document.getElementById('author').value.trim(), publisher:document.getElementById('publisher').value.trim(), year:parseInt(document.getElementById('year').value)||0};
+    if(q.title && (q.author||q.publisher||q.year)){ const r=await lookupByMetadata(q); if(r) return r; }
+  }
   if(isIsbn){ const w=await workerWaterfall(isbnInfo(code).isbn13||code); if(w) return w; }   // cascata lato server; se non risponde si ripiega sulle chiamate dirette
   const r=await Promise.allSettled([srcGoogle(value,isIsbn,code), isIsbn? null : workerLookup(value,isIsbn,code), srcOpenLibrary(value,isIsbn,code)]);
   const m=mergeBook(r.map(x=>x.status==='fulfilled'?x.value:null));
