@@ -253,7 +253,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
   <textarea id="synopsis" placeholder="Sinossi" rows="3"></textarea>
   <textarea id="notes" placeholder="Note" rows="2"></textarea>
   <div>
-    <img id="coverPreview">
+    <img id="coverPreview" referrerpolicy="no-referrer" onerror="previewFail(this)">
     <div class="row" style="margin-bottom:6px"><input id="coverPageUrl" placeholder="Link pagina (Wikipedia / editore) da cui prendere la copertina" style="flex:1"><button type="button" class="ghost" onclick="coverFromPage()">🔗 Prendi</button></div>
     <button class="ghost" id="coverBtn" onclick="document.getElementById('coverInput').click()">📷 Aggiungi copertina (opzionale)</button>
     <input type="file" accept="image/*" capture="environment" id="coverInput" style="display:none" onchange="onCoverSelected(event)">
@@ -612,9 +612,14 @@ async function coverFromPage(){
 function coverFail(img){
   const isbn=img.dataset.isbn, step=+(img.dataset.step||0);
   img.dataset.step=step+1;
-  if(step===0 && isbn.length>=10){ img.src='https://covers.openlibrary.org/b/isbn/'+isbn+'-M.jpg?default=false'; return; }
-  const d=document.createElement('div'); d.className='cover placeholder'; d.style.backgroundColor=img.dataset.bg; d.textContent=img.dataset.ini;
+  if(step===0){ img.dataset.orig=img.src; if(WORKER_URL && !/\/\?img=/.test(img.src)){ img.src=WORKER_URL.replace(/\/$/,'')+'/?img='+encodeURIComponent(img.src); return; } }   // 1° ripiego: la copertina passa dal worker (aggira i blocchi dei siti di origine)
+  if(step<=1 && isbn.length>=10){ img.dataset.step=2; img.src='https://covers.openlibrary.org/b/isbn/'+isbn+'-M.jpg?default=false'; return; }                 // 2° ripiego: Open Library per ISBN
+  const d=document.createElement('div'); d.className='cover placeholder'; d.style.backgroundColor=img.dataset.bg; d.textContent=img.dataset.ini;      // 3°: segnaposto
   img.replaceWith(d);
+}
+function previewFail(img){
+  if(img.dataset.tried||!WORKER_URL||!img.src||/\/\?img=/.test(img.src)){ img.style.display='none'; return; }
+  img.dataset.tried='1'; img.src=WORKER_URL.replace(/\/$/,'')+'/?img='+encodeURIComponent(img.src);
 }
 function renderCard(i){
   const mode=document.getElementById('displayMode').value;
@@ -1547,6 +1552,17 @@ function wgFields(body) {
   }
   flush(); return out;
 }
+
+// Immagine dell'infobox (campo immagine / copertina): restituisce il nome del file, scartando loghi, mappe e SVG
+function wgImageFile(f) {
+  for (const k of ['immagine', 'copertina', 'image', 'cover', 'immagine copertina', 'file']) {
+    if (!f[k]) continue;
+    let v = String(f[k]).replace(/<!--[\s\S]*?-->/g, '').replace(/<ref[\s\S]*?(<\/ref>|\/>)/gi, '').replace(/\[\[/g, '').trim();
+    v = v.split('|')[0].replace(/^(file|immagine|image|archivio)\s*:\s*/i, '').trim();
+    if (/\.(jpe?g|png|gif|webp)$/i.test(v) && !/logo|flag|bandiera|stemma|mappa|map\b|firma|signature|placeholder/i.test(v)) return v;
+  }
+  return '';
+}
 function wgCap(s) { s = s.trim(); return s ? s[0].toUpperCase() + s.slice(1) : s; }
 function wgSplitValue(v) {
   const items = [];
@@ -1582,7 +1598,7 @@ function extractWikiGenres(wikitext, title) {
   const seen = new Set(), generi = [];
   if (tipo === 'Manga' || tipo === 'Fumetto') generi.push(tipo), seen.add(tipo);
   for (const g of all) { const k = g.toLowerCase(); if (!seen.has(k.replace(/^./, c => c.toUpperCase())) && !seen.has(g)) { seen.add(g); generi.push(g); } }
-  return { titolo_opera: String(title || '').replace(/\s*\([^)]*\)\s*$/, ''), tipo_opera: tipo, generi };
+  return { titolo_opera: String(title || '').replace(/\s*\([^)]*\)\s*$/, ''), tipo_opera: tipo, generi, immagine: wgImageFile(f) };
 }
 
 async function wikiSection0(lang,title){
@@ -1613,6 +1629,7 @@ async function srcWikipedia(title,author,hint){
           const cats=(hit.categories||[]).map(c=>c.title.replace(/^[^:]+:/,'')).filter(c=>!/wikipedia|pagine|voci |template|disambig|portale|collegament|articles|cs1|use dmy|short description/i.test(c));
           let wg=null; try{ wg=extractWikiGenres(await wikiSection0(lang,hit.title),hit.title); }catch(e){}
           const th=hit.thumbnail&&hit.thumbnail.source; let cover=''; try{ cover=th&&!/logo|flag|stemma|\.svg|commons-logo|wiki/i.test(decodeURIComponent(th).split('/').pop())? th.replace(/^http:/,'https:') : ''; }catch(e){}
+          if(wg&&wg.immagine) cover='https://'+lang+'.wikipedia.org/wiki/Special:FilePath/'+encodeURIComponent(wg.immagine)+'?width=400';   // immagine dell'infobox
           return { source:'Wikipedia', cover, lang, title:hit.title, categories:cats, extract:String(hit.extract||'').slice(0,500), wikiGenres:wg?wg.generi:[], wikiTipo:wg?wg.tipo_opera:'' };
         }
       }
