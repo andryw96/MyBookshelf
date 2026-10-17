@@ -1451,6 +1451,7 @@ async function srcGoogle(value,isIsbn,code){
     const gurl='https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(q)+'&maxResults='+(isIsbn?1:5)+googleKeyParam();
     let {status,data}=await fetchJson(gurl);
     if(status>=500){ await new Promise(r=>setTimeout(r,700)); ({status,data}=await fetchJson(gurl)); }   // Google risponde ogni tanto 503: un secondo tentativo
+    if((status>=500||status===403) && googleKeyParam()){ ({status,data}=await fetchJson(gurl.replace(googleKeyParam(),''))); }   // ancora errore con la chiave: si riprova senza chiave
     if(status===429) googleBooksLimited=true;
     let p=pickGoogleVolume(data&&data.items);
     if(!p && isIsbn){   // alcuni ISBN italiani si trovano solo come testo libero
@@ -1625,7 +1626,11 @@ async function workerWaterfall(isbn13){
     const {status,data}=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?isbn='+encodeURIComponent(isbn13),20000);
     const b=data&&data.book;
     if(!b||!b.title){ workerNote = (data&&data.error) || ('risposta '+status); return null; }
-    return { title:b.title, author:(b.authors||[]).join(', '), publisher:b.publisher||'', isbn:b.isbn13||isbn13, coverUrl:b.coverUrl||null,
+    let cov=b.coverUrl||null, covSrc=b.coverSource||'';
+    if((!cov||covSrc==='Wikipedia') && b.publisher){   // copertina dal sito dell'editore: richiesta separata (non pesa sulla ricerca principale)
+      try{ const r=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?cover=1&isbn='+encodeURIComponent(isbn13)+'&publisher='+encodeURIComponent(b.publisher),12000); if(r.data&&r.data.coverUrl){ cov=r.data.coverUrl; } }catch(e){}
+    }
+    return { title:b.title, author:(b.authors||[]).join(', '), publisher:b.publisher||'', isbn:b.isbn13||isbn13, coverUrl:cov,
       categories:b.genres||[], description:b.description||'', dewey:b.dewey||'', wikiCats:b.wikiCats||[], wikiText:b.wikiText||'', wikiGenres:b.wikiGenres||[], wikiTipo:b.wikiTipo||'',
       year:b.year||'', language:b.language||'', source:(data.sources||[]).join(' + ') };
   }catch(e){ workerNote = e&&e.name==='AbortError' ? 'nessuna risposta entro 20 secondi' : 'non raggiungibile ('+(e&&e.message||'errore di rete')+')'; return null; }
