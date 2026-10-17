@@ -254,6 +254,7 @@ small.hint{color:var(--sub);display:block;margin:-8px 0 10px}
   <textarea id="notes" placeholder="Note" rows="2"></textarea>
   <div>
     <img id="coverPreview">
+    <div class="row" style="margin-bottom:6px"><input id="coverPageUrl" placeholder="Link pagina (Wikipedia / editore) da cui prendere la copertina" style="flex:1"><button type="button" class="ghost" onclick="coverFromPage()">🔗 Prendi</button></div>
     <button class="ghost" id="coverBtn" onclick="document.getElementById('coverInput').click()">📷 Aggiungi copertina (opzionale)</button>
     <input type="file" accept="image/*" capture="environment" id="coverInput" style="display:none" onchange="onCoverSelected(event)">
   </div>
@@ -591,6 +592,22 @@ const TYPE_COLORS={'Fumetto':'#b8894f','Manga':'#3c6e57','Libro':'#4a5f7a','Rivi
 function coverImg(url,isbn,type,initial){
   const bg=cfg().typeColors[type]||'#3c6e57';
   return `<img class="cover" src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-isbn="${esc(String(isbn||'').replace(/\D/g,''))}" data-bg="${esc(bg)}" data-ini="${esc(initial)}" onerror="coverFail(this)">`;
+}
+async function coverFromPage(){
+  const url=document.getElementById('coverPageUrl').value.trim();
+  if(!/^https?:\/\//i.test(url)){ setStatus('Incolla l\'indirizzo completo della pagina (https://...).'); return; }
+  setStatus('🔎 Cerco la copertina in quella pagina...');
+  try{
+    let img='';
+    const wk=/wikipedia\.org\/wiki\/([^?#]+)/i.exec(url);
+    if(wk){ try{ const {data}=await fetchJson('https://'+url.split('/')[2]+'/w/api.php?action=query&format=json&origin=*&prop=pageimages&piprop=original&titles='+encodeURIComponent(decodeURIComponent(wk[1]).replace(/_/g,' ')),8000);
+      const pg=data&&data.query&&Object.values(data.query.pages||{})[0]; img=pg&&pg.original&&pg.original.source||''; }catch(e){} }
+    if(!img && WORKER_URL){ const {data}=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?page='+encodeURIComponent(url),12000); img=data&&data.coverUrl||''; }
+    if(!img){ setStatus('⚠️ Nessuna immagine trovata in quella pagina.'); return; }
+    pendingRemoteCover=img; coverFile=null; coverDataUrl=null;
+    const prev=document.getElementById('coverPreview'); prev.src=img; prev.style.display='block';
+    setStatus('✅ Copertina trovata. Salva la scheda per conservarla.');
+  }catch(e){ setStatus('❌ Impossibile leggere quella pagina.'); }
 }
 function coverFail(img){
   const isbn=img.dataset.isbn, step=+(img.dataset.step||0);
@@ -1574,7 +1591,7 @@ async function wikiSection0(lang,title){
 }
 async function wikiQuery(lang,q){
   const url='https://'+lang+'.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=0&gsrlimit=5&gsrsearch='+encodeURIComponent(q)+
-    '&prop=extracts%7Ccategories&exintro=1&explaintext=1&exsentences=3&exlimit=5&cllimit=max&clshow=!hidden';
+    '&prop=extracts%7Ccategories%7Cpageimages&exintro=1&explaintext=1&exsentences=3&exlimit=5&cllimit=max&clshow=!hidden&piprop=thumbnail&pithumbsize=400&pilimit=5';
   const {data}=await fetchJson(url,7000);
   const pages=data&&data.query&&data.query.pages; if(!pages) return [];
   return Object.values(pages).sort((a,b)=>(a.index||99)-(b.index||99));
@@ -1594,7 +1611,8 @@ async function srcWikipedia(title,author,hint){
         if(hit){
           const cats=(hit.categories||[]).map(c=>c.title.replace(/^[^:]+:/,'')).filter(c=>!/wikipedia|pagine|voci |template|disambig|portale|collegament|articles|cs1|use dmy|short description/i.test(c));
           let wg=null; try{ wg=extractWikiGenres(await wikiSection0(lang,hit.title),hit.title); }catch(e){}
-          return { source:'Wikipedia', lang, title:hit.title, categories:cats, extract:String(hit.extract||'').slice(0,500), wikiGenres:wg?wg.generi:[], wikiTipo:wg?wg.tipo_opera:'' };
+          const th=hit.thumbnail&&hit.thumbnail.source; let cover=''; try{ cover=th&&!/logo|flag|stemma|\.svg|commons-logo|wiki/i.test(decodeURIComponent(th).split('/').pop())? th.replace(/^http:/,'https:') : ''; }catch(e){}
+          return { source:'Wikipedia', cover, lang, title:hit.title, categories:cats, extract:String(hit.extract||'').slice(0,500), wikiGenres:wg?wg.generi:[], wikiTipo:wg?wg.tipo_opera:'' };
         }
       }
     }
@@ -1676,7 +1694,7 @@ async function lookupByMetadata(q){
     language:pick('language'), coverUrl:pick('coverUrl')||null, categories:[].concat(...ok.map(c=>c.categories||[])), description:pick('description'), dewey:'',
     source:[...new Set(ok.map(c=>c.source))].join(' + ')+' (per titolo/autore/editore/anno)' };
   const w=await srcWikipedia(m.title.replace(/\s*[:–-]\s*.*$/,'')||m.title, m.author,'');
-  if(w && (w.categories.length||w.extract||(w.wikiGenres||[]).length)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.source+=' + Wikipedia'; }
+  if(w && (w.categories.length||w.extract||(w.wikiGenres||[]).length)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.wikiCover=w.cover; m.source+=' + Wikipedia'; }
   return m;
 }
 async function lookupBook(value, isIsbn){
@@ -1690,7 +1708,7 @@ async function lookupBook(value, isIsbn){
   const m=mergeBook(r.map(x=>x.status==='fulfilled'?x.value:null));
   if(!m) return null;
   const w=await srcWikipedia(m.title,m.author,'');
-  if(w && (w.categories.length||w.extract)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.source=(m.source?m.source+' + ':'')+'Wikipedia'; }
+  if(w && (w.categories.length||w.extract)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.wikiCover=w.cover; m.source=(m.source?m.source+' + ':'')+'Wikipedia'; }
   return m;
 }
 async function lookupMusic(value, isBarcode){
@@ -1761,9 +1779,10 @@ async function searchGeneric(value, isCodeOnly){
       if(type && !typeTouched && cfg().types.includes(type)){
         document.getElementById('type').value=type; updateGenreOptions(); toggleVolumesSection();
       }
-      if(out.coverUrl){
-        pendingRemoteCover=out.coverUrl;
-        const prev=document.getElementById('coverPreview'); prev.src=out.coverUrl; prev.style.display='block';
+      const cover=out.coverUrl||out.wikiCover;   // copertina dell'edizione se c'è, altrimenti l'immagine della pagina Wikipedia
+      if(cover){
+        pendingRemoteCover=cover;
+        const prev=document.getElementById('coverPreview'); prev.src=cover; prev.style.display='block';
       }
       document.getElementById('aiHint').style.display='block';
       const missing=[]; if(!document.getElementById('publisher').value.trim()) missing.push(activeCatalog==='music'?'etichetta':'editore');
