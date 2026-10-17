@@ -587,13 +587,25 @@ function countBy(list,field){
   list.forEach(i=>{ const v=i[field]; if(v) c[v]=(c[v]||0)+1; }); return c;
 }
 const TYPE_COLORS={'Fumetto':'#b8894f','Manga':'#3c6e57','Libro':'#4a5f7a','Rivista':'#8f5a56'};
+// Copertina remota con ripiego: se l'immagine non carica prova Open Library (per ISBN), poi mostra il segnaposto colorato
+function coverImg(url,isbn,type,initial){
+  const bg=cfg().typeColors[type]||'#3c6e57';
+  return `<img class="cover" src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-isbn="${esc(String(isbn||'').replace(/\D/g,''))}" data-bg="${esc(bg)}" data-ini="${esc(initial)}" onerror="coverFail(this)">`;
+}
+function coverFail(img){
+  const isbn=img.dataset.isbn, step=+(img.dataset.step||0);
+  img.dataset.step=step+1;
+  if(step===0 && isbn.length>=10){ img.src='https://covers.openlibrary.org/b/isbn/'+isbn+'-M.jpg?default=false'; return; }
+  const d=document.createElement('div'); d.className='cover placeholder'; d.style.backgroundColor=img.dataset.bg; d.textContent=img.dataset.ini;
+  img.replaceWith(d);
+}
 function renderCard(i){
   const mode=document.getElementById('displayMode').value;
   const el=document.createElement('div');
   el.className='card';
   const initial=(seriesOf(i)||i.title||'?').trim()[0]?.toUpperCase()||'?';
   const coverHtml = i.coverUrl
-    ? `<img class="cover" src="${i.coverUrl}" alt="">`
+    ? coverImg(i.coverUrl,i.isbn,i.type,initial)
     : `<div class="cover placeholder" style="background-color:${cfg().typeColors[i.type]||'#3c6e57'}">${initial}</div>`;
   const statusIcon=cfg().statusIcons[i.status]||cfg().statusIcons[cfg().statusOptions[0]];
   el.style.cursor='pointer';
@@ -665,7 +677,7 @@ function renderSeriesView(filtered,list){
     const card=document.createElement('div');
     card.className='card'; card.style.cursor='pointer';
     const initial=(g.base||'?').trim()[0]?.toUpperCase()||'?';
-    const coverHtml = g.coverUrl? `<img class="cover" src="${g.coverUrl}" alt="">` : `<div class="cover placeholder" style="background-color:${cfg().typeColors[g.items[0].type]||'#3c6e57'}">${initial}</div>`;
+    const coverHtml = g.coverUrl? coverImg(g.coverUrl,(g.items.find(x=>x.isbn)||{}).isbn,g.items[0].type,initial) : `<div class="cover placeholder" style="background-color:${cfg().typeColors[g.items[0].type]||'#3c6e57'}">${initial}</div>`;
     card.innerHTML=`${coverHtml}<div class="meta"><div class="t">${esc(g.base)}</div><div class="s">${esc(g.author||'')}</div>
       <div style="background:var(--bg);border-radius:6px;overflow:hidden;height:8px;margin-top:6px"><div style="width:${pct}%;background:var(--accent);height:100%"></div></div>
       <span class="tag">📚 ${owned}${total?'/'+total:''} volumi</span></div>`;
