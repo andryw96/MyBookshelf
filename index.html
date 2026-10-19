@@ -1705,6 +1705,20 @@ async function mdCandidates(q){
   }catch(e){ diag.OpenLibrary='errore'; if(!q.publisher) break; } }
   return {out,diag};
 }
+// Copertina automatica per qualsiasi ricerca: edizione esatta (Google/OL/SBN) → sito dell'editore → infobox/immagine di Wikipedia
+async function ensureCover(m){
+  try{
+    if(!m) return m;
+    if(m.coverUrl && !m.coverFromWiki) return m;
+    const isb=isbnInfo(m.isbn||'').isbn13;
+    if(WORKER_URL && isb && m.publisher){
+      try{ const r=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?cover=1&isbn='+isb+'&publisher='+encodeURIComponent(m.publisher),12000);
+        if(r.data&&r.data.coverUrl){ m.coverUrl=r.data.coverUrl; m.coverFromWiki=false; m.source=(m.source?m.source+' + ':'')+'sito editore'; return m; } }catch(e){}
+    }
+    if(!m.coverUrl && m.wikiCover){ m.coverUrl=m.wikiCover; m.coverFromWiki=true; }
+  }catch(e){}
+  return m;
+}
 async function lookupByMetadata(q){
   const THRESH=.6;
   const {out:cands,diag}=await mdCandidates(q); const dtxt=Object.entries(diag).map(([k,v])=>k+': '+v).join(', ');
@@ -1717,7 +1731,7 @@ async function lookupByMetadata(q){
     source:[...new Set(ok.map(c=>c.source))].join(' + ')+' (per titolo/autore/editore/anno)' };
   const w=await srcWikipedia(m.title.replace(/\s*[:–-]\s*.*$/,'')||m.title, m.author,'');
   if(w && (w.categories.length||w.extract||(w.wikiGenres||[]).length)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.wikiCover=w.cover; m.source+=' + Wikipedia'; }
-  return m;
+  return await ensureCover(m);
 }
 async function lookupBook(value, isIsbn){
   const code=value.replace(/[^0-9Xx]/g,'');
@@ -1731,7 +1745,7 @@ async function lookupBook(value, isIsbn){
   if(!m) return null;
   const w=await srcWikipedia(m.title,m.author,'');
   if(w && (w.categories.length||w.extract)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.wikiCover=w.cover; m.source=(m.source?m.source+' + ':'')+'Wikipedia'; }
-  return m;
+  return await ensureCover(m);
 }
 async function lookupMusic(value, isBarcode){
   try{
