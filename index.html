@@ -1871,6 +1871,24 @@ async function searchGeneric(value, isCodeOnly){
   }catch(e){ setStatus('❌ Ricerca non riuscita (verifica la connessione).'); }
 }
 
+// Salva la copertina sul dispositivo (miniatura JPEG): così le schede non dipendono più dal sito di origine
+// (blocchi anti-hotlink, link che cambiano, rete lenta). Prova prima il download diretto, poi il passaggio dal worker.
+async function cacheCover(url){
+  try{
+    if(!/^https?:/i.test(url)) return null;
+    if(JSON.stringify(items).length>3200000) return null;      // spazio quasi pieno (limite ~5 MB del browser): si tiene il link
+    const get=async u=>{ const ac=new AbortController(); const t=setTimeout(()=>ac.abort(),9000); try{ const r=await fetch(u,{signal:ac.signal,referrerPolicy:'no-referrer'}); if(!r.ok) return null; const b=await r.blob(); return /^image\//.test(b.type)&&b.size<4e6? b : null; }catch(e){ return null; } finally{ clearTimeout(t); } };
+    let blob=await get(url);
+    if(!blob && WORKER_URL) blob=await get(WORKER_URL.replace(/\/$/,'')+'/?img='+encodeURIComponent(url));
+    if(!blob) return null;
+    const bmp=await createImageBitmap(blob);
+    if(bmp.width<60||bmp.height<60) return null;                  // pixel vuoto / immagine segnaposto
+    const w=Math.min(220,bmp.width), hgt=Math.round(bmp.height*w/bmp.width);
+    const cv=document.createElement('canvas'); cv.width=w; cv.height=hgt; const cx=cv.getContext('2d'); cx.fillStyle='#fff'; cx.fillRect(0,0,w,hgt); cx.drawImage(bmp,0,0,w,hgt);
+    const d=cv.toDataURL('image/jpeg',0.72);
+    return d.length<70000? d : null;
+  }catch(e){ return null; }
+}
 async function save(){
   const title=document.getElementById('title').value.trim();
   const type=document.getElementById('type').value;
@@ -1895,7 +1913,8 @@ async function save(){
     favorite: existing ? !!existing.favorite : false
   };
   if(coverFile && coverDataUrl){ base.coverUrl = coverDataUrl; }
-  else if(pendingRemoteCover){ base.coverUrl = pendingRemoteCover; }
+  else if(pendingRemoteCover){ base.coverUrl = (await cacheCover(pendingRemoteCover)) || pendingRemoteCover; }
+  else if(/^https?:/i.test(base.coverUrl||'')){ const d=await cacheCover(base.coverUrl); if(d) base.coverUrl=d; }   // schede già salvate con un link: si converte al salvataggio
 
   if(isMultiVolume){
     const totalVolumes = parseInt(document.getElementById('totalVolumes').value)||null;
