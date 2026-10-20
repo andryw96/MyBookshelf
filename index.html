@@ -1726,6 +1726,14 @@ async function mdCandidates(q){
   return {out,diag};
 }
 const badCover=u=>/librarything\.com/i.test(u||'');   // le copertine LibraryThing indicate da SBN sono bloccate fuori dal loro sito
+// Google risponde 200 con un'immagine "copertina non disponibile" quando manca: la si riconosce confrontando le dimensioni in byte con una richiesta di riferimento (serve il worker per leggere i byte)
+let gBlankSize=null;
+async function viaWorkerBlob(u){ if(!WORKER_URL) return null; try{ const r=await fetch(WORKER_URL.replace(/\/$/,'')+'/?img='+encodeURIComponent(u)); if(!r.ok) return null; const bl=await r.blob(); return /^image\//.test(bl.type)? bl : null; }catch(e){ return null; } }
+async function isGoogleBlank(u){
+  const b=await viaWorkerBlob(u); if(!b) return false;
+  if(gBlankSize===null){ const ref=await viaWorkerBlob('https://books.google.com/books/content?vid=ISBN9780000000002&printsec=frontcover&img=1&zoom=1&source=gbs_api'); gBlankSize=ref?ref.size:-1; }
+  return b.size===gBlankSize;
+}
 // Verifica che un'immagine si carichi davvero (e non sia il pixel vuoto che certi siti restituiscono quando manca la copertina)
 function imgOk(url,ms){
   return new Promise(res=>{ const im=new Image(); let done=false; const end=v=>{ if(!done){ done=true; res(v); } };
@@ -1738,14 +1746,23 @@ async function findCoverByMetadata(m){
   const cands=[];
   if(isb){
     const i10=isbnInfo(isb).isbn10;
-    cands.push(['https://covers.openlibrary.org/b/isbn/'+isb+'-L.jpg?default=false','Open Library (ISBN)']);
-    if(m.googleId) cands.push(['https://books.google.com/books/content?id='+m.googleId+'&printsec=frontcover&img=1&zoom=1&source=gbs_api','Google Books (scheda)']);
-    cands.push(['https://books.google.com/books/content?vid=ISBN'+isb+'&printsec=frontcover&img=1&zoom=1&source=gbs_api','Google Books (ISBN)']);
-    cands.push(['https://cdn.unilibro.it/cover/libro/'+isb+'B.jpg','Unilibro']);                                  // libreria online: copertina per ISBN-13
-    if(i10) cands.push(['https://images-na.ssl-images-amazon.com/images/P/'+i10+'.01.LZZZZZZZ.jpg','Amazon']);     // se manca, risponde con un pixel (scartato)
-    if(i10) cands.push(['https://covers.openlibrary.org/b/isbn/'+i10+'-L.jpg?default=false','Open Library (ISBN-10)']);
-  } else if(m.googleId) cands.push(['https://books.google.com/books/content?id='+m.googleId+'&printsec=frontcover&img=1&zoom=1&source=gbs_api','Google Books (scheda)']);
-  for(const [u,s] of cands){ if(await imgOk(u,5000)) return {url:u,src:s}; }
+    // 1. Open Library tramite API (risposta JSON: nessun errore in console quando la copertina manca)
+    try{
+      const keys=['ISBN:'+isb, i10&&'ISBN:'+i10].filter(Boolean).join(',');
+      const {data}=await fetchJson('https://openlibrary.org/api/books?bibkeys='+keys+'&format=json&jscmd=data',7000);
+      for(const k of Object.keys(data||{})){ const c=data[k].cover, u=c&&(c.large||c.medium); if(u){ const uu=String(u).replace(/^http:/,'https:'); if(await imgOk(uu,6000)) return {url:uu,src:'Open Library'}; } }
+    }catch(e){}
+    // 2. librerie e cataloghi con copertina per ISBN, provati in parallelo (vale il primo, nell'ordine di priorità)
+    if(m.googleId) cands.push(['https://books.google.com/books/content?id='+m.googleId+'&printsec=frontcover&img=1&zoom=1&source=gbs_api','Google Books (scheda)',1]);
+    cands.push(['https://books.google.com/books/content?vid=ISBN'+isb+'&printsec=frontcover&img=1&zoom=1&source=gbs_api','Google Books (ISBN)',1]);
+    cands.push(['https://www.ibs.it/images/'+isb+'_0_0_536_0_75.jpg','IBS']);
+    cands.push(['https://www.lafeltrinelli.it/images/'+isb+'_0_0_536_0_75.jpg','laFeltrinelli']);
+    cands.push(['https://cdn.unilibro.it/cover/libro/'+isb+'B.jpg','Unilibro']);
+    cands.push(['https://pictures.abebooks.com/isbn/'+isb+'-us-300.jpg','AbeBooks']);
+    if(i10) cands.push(['https://images-na.ssl-images-amazon.com/images/P/'+i10+'.01.LZZZZZZZ.jpg','Amazon']);     // se manca risponde con un pixel (scartato)
+  } else if(m.googleId) cands.push(['https://books.google.com/books/content?id='+m.googleId+'&printsec=frontcover&img=1&zoom=1&source=gbs_api','Google Books (scheda)',1]);
+  const oks=await Promise.all(cands.map(c=>imgOk(c[0],6000)));
+  for(let i=0;i<cands.length;i++){ if(oks[i]){ if(cands[i][2] && await isGoogleBlank(cands[i][0])) continue; return {url:cands[i][0],src:cands[i][1]}; } }
   if(!title) return null;
   // Open Library per titolo+autore: si sceglie l'edizione più vicina all'anno, se noto
   try{
@@ -1908,8 +1925,8 @@ async function cacheCover(url){
     if(!/^https?:/i.test(url)) return null;
     if(JSON.stringify(items).length>3200000) return null;      // spazio quasi pieno (limite ~5 MB del browser): si tiene il link
     const get=async u=>{ const ac=new AbortController(); const t=setTimeout(()=>ac.abort(),9000); try{ const r=await fetch(u,{signal:ac.signal,referrerPolicy:'no-referrer'}); if(!r.ok) return null; const b=await r.blob(); return /^image\//.test(b.type)&&b.size<4e6? b : null; }catch(e){ return null; } finally{ clearTimeout(t); } };
-    let blob=await get(url);
-    if(!blob && WORKER_URL) blob=await get(WORKER_URL.replace(/\/$/,'')+'/?img='+encodeURIComponent(url));
+    let blob=WORKER_URL? await get(WORKER_URL.replace(/\/$/,'')+'/?img='+encodeURIComponent(url)) : null;   // prima dal worker (niente errori CORS in console)
+    if(!blob) blob=await get(url);
     if(!blob) return null;
     const bmp=await createImageBitmap(blob);
     if(bmp.width<60||bmp.height<60) return null;                  // pixel vuoto / immagine segnaposto
