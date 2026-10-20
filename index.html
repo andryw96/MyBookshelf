@@ -1705,7 +1705,38 @@ async function mdCandidates(q){
   }catch(e){ diag.OpenLibrary='errore'; if(!q.publisher) break; } }
   return {out,diag};
 }
-// Copertina automatica per qualsiasi ricerca: edizione esatta (Google/OL/SBN) → sito dell'editore → infobox/immagine di Wikipedia
+// Verifica che un'immagine si carichi davvero (e non sia il pixel vuoto che certi siti restituiscono quando manca la copertina)
+function imgOk(url,ms){
+  return new Promise(res=>{ const im=new Image(); let done=false; const end=v=>{ if(!done){ done=true; res(v); } };
+    im.referrerPolicy='no-referrer'; im.onload=()=>end(im.naturalWidth>=60&&im.naturalHeight>=60); im.onerror=()=>end(false); setTimeout(()=>end(false),ms||6000); im.src=url; });
+}
+// Cerca la copertina online con tutto ciò che si sa dell'opera: ISBN, titolo, autore, editore, anno
+async function findCoverByMetadata(m){
+  const title=String(m.title||'').replace(/\s*[:–-]\s*vol(?:ume)?\.?\s*\d+.*$/i,'').trim(), author=m.author||'', yr=parseInt(m.year)||0;
+  const isb=isbnInfo(m.isbn||'').isbn13;
+  const cands=[];
+  if(isb){ cands.push('https://covers.openlibrary.org/b/isbn/'+isb+'-L.jpg?default=false'); if(isbnInfo(isb).isbn10) cands.push('https://covers.openlibrary.org/b/isbn/'+isbnInfo(isb).isbn10+'-L.jpg?default=false'); }
+  for(const u of cands){ if(await imgOk(u,5000)) return {url:u,src:'Open Library (ISBN)'}; }
+  if(!title) return null;
+  // Open Library per titolo+autore: si sceglie l'edizione più vicina all'anno, se noto
+  try{
+    const p=new URLSearchParams(); p.set('title',title); if(author) p.set('author',author); p.set('limit','10'); p.set('fields','title,author_name,first_publish_year,publish_year,cover_i,isbn');
+    const {data}=await fetchJson('https://openlibrary.org/search.json?'+p,9000);
+    const docs=((data&&data.docs)||[]).filter(d=>d.cover_i && mdJaccard(d.title,title)>=.6 && (!author||(d.author_name||[]).some(a=>mdNorm(a).includes(mdSurname(author)))));
+    docs.sort((a,b)=>Math.abs((a.first_publish_year||0)-yr)-Math.abs((b.first_publish_year||0)-yr));
+    for(const d of docs.slice(0,3)){ const u='https://covers.openlibrary.org/b/id/'+d.cover_i+'-L.jpg?default=false'; if(await imgOk(u,6000)) return {url:u,src:'Open Library'}; }
+  }catch(e){}
+  // Google Books per titolo+autore(+editore): copertina dell'edizione con anno e titolo più vicini
+  try{
+    const parts=['intitle:"'+title+'"', author&&'inauthor:"'+author+'"'].filter(Boolean).join('+');
+    const {data}=await fetchJson('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(parts).replace(/%2B/g,'+')+'&maxResults=10&printType=books'+(GOOGLE_BOOKS_KEY?'&key='+GOOGLE_BOOKS_KEY:''),9000);
+    const items=((data&&data.items)||[]).map(i=>i.volumeInfo||{}).filter(v=>v.imageLinks&&v.imageLinks.thumbnail&&mdJaccard(v.title||'',title)>=.6);
+    items.sort((a,b)=>Math.abs((parseInt(String(a.publishedDate||'').slice(0,4))||0)-yr)-Math.abs((parseInt(String(b.publishedDate||'').slice(0,4))||0)-yr));
+    for(const v of items.slice(0,3)){ const u=String(v.imageLinks.thumbnail).replace(/^http:/,'https:').replace('&edge=curl',''); if(await imgOk(u,6000)) return {url:u,src:'Google Books'}; }
+  }catch(e){}
+  return null;
+}
+// Copertina automatica per qualsiasi ricerca: edizione esatta (Google/OL/SBN) → sito dell'editore → ricerca per titolo/autore/anno → infobox/immagine di Wikipedia
 async function ensureCover(m){
   try{
     if(!m) return m;
@@ -1715,6 +1746,8 @@ async function ensureCover(m){
       try{ const r=await fetchJson(WORKER_URL.replace(/\/$/,'')+'/?cover=1&isbn='+isb+'&publisher='+encodeURIComponent(m.publisher),12000);
         if(r.data&&r.data.coverUrl){ m.coverUrl=r.data.coverUrl; m.coverFromWiki=false; m.source=(m.source?m.source+' + ':'')+'sito editore'; return m; } }catch(e){}
     }
+    const f=await findCoverByMetadata(m);
+    if(f){ m.coverUrl=f.url; m.coverFromWiki=false; m.source=(m.source?m.source+' + ':'')+'copertina: '+f.src; return m; }
     if(!m.coverUrl && m.wikiCover){ m.coverUrl=m.wikiCover; m.coverFromWiki=true; }
   }catch(e){}
   return m;
@@ -1729,6 +1762,7 @@ async function lookupByMetadata(q){
   const m={ title:ok[0].title, author:((a)=>a.includes(',')?a.split(',').reverse().map(x=>x.trim()).join(' '):a)(ok[0].author||q.author||''), publisher:pick('publisher')||q.publisher||'', year:pick('year')||q.year||'', isbn:pick('isbn'), bid:pick('bid'),
     language:pick('language'), coverUrl:pick('coverUrl')||null, categories:[].concat(...ok.map(c=>c.categories||[])), description:pick('description'), dewey:'',
     source:[...new Set(ok.map(c=>c.source))].join(' + ')+' (per titolo/autore/editore/anno)' };
+  if(q.year && q.year<1970) m.isbn='';   // edizione antica: l'ISBN dei candidati è di una ristampa
   const w=await srcWikipedia(m.title.replace(/\s*[:–-]\s*.*$/,'')||m.title, m.author,'');
   if(w && (w.categories.length||w.extract||(w.wikiGenres||[]).length)){ m.wikiCats=w.categories; m.wikiText=w.extract; m.wikiGenres=w.wikiGenres; m.wikiTipo=w.wikiTipo; m.wikiCover=w.cover; m.source+=' + Wikipedia'; }
   return await ensureCover(m);
@@ -1799,7 +1833,9 @@ async function searchGeneric(value, isCodeOnly){
       if(out.title) document.getElementById('title').value = out.title;
       if(out.author) document.getElementById('author').value = out.author;
       if(out.publisher && !document.getElementById('publisher').value.trim()) document.getElementById('publisher').value = out.publisher;
-      if(out.isbn && !document.getElementById('isbn').value.trim()) document.getElementById('isbn').value = out.isbn;
+      const yrNow=parseInt(document.getElementById('year').value)||parseInt(out.year)||0;
+      const preIsbn = activeCatalog!=='music' && yrNow && yrNow<1970;   // l'ISBN è stato introdotto nel 1970: prima non esiste (un ISBN trovato è di una ristampa)
+      if(out.isbn && !document.getElementById('isbn').value.trim() && !preIsbn) document.getElementById('isbn').value = out.isbn;
       if(out.year && !document.getElementById('year').value) document.getElementById('year').value = out.year;
       if(activeCatalog!=='music'){
         if(out.language && !document.getElementById('language').value.trim()) document.getElementById('language').value = String(out.language).toLowerCase();
@@ -1824,7 +1860,7 @@ async function searchGeneric(value, isCodeOnly){
       const missing=[]; if(!document.getElementById('publisher').value.trim()) missing.push(activeCatalog==='music'?'etichetta':'editore');
       if(!gEl.value.trim()) missing.push('genere');
       const tp = activeCatalog==='music'? '' : ' · Tipo: '+document.getElementById('type').value;
-      setStatus('✅ Trovato online'+(out.source?' ('+out.source+')':'')+tp+(gEl.value.trim()?' · Genere: '+gEl.value.trim():'')+(missing.length? ' · Non trovati: '+missing.join(', ')+' (compilali a mano)' : '')+'. Controlla i dati prima di salvare.');
+      setStatus('✅ Trovato online'+(out.source?' ('+out.source+')':'')+(preIsbn&&out.isbn?' · ISBN non inserito: edizione anteriore al 1970 (senza ISBN)':'')+tp+(gEl.value.trim()?' · Genere: '+gEl.value.trim():'')+(missing.length? ' · Non trovati: '+missing.join(', ')+' (compilali a mano)' : '')+'. Controlla i dati prima di salvare.');
     } else if(googleBooksLimited){
       setStatus('⏳ Troppe ricerche in poco tempo (limite gratuito di Google Books). Riprova tra un minuto, o aggiungi una chiave API gratuita (vedi guida) per non avere più questo limite.');
     } else if(isCodeOnly){
