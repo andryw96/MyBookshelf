@@ -589,9 +589,29 @@ function countBy(list,field){
 }
 const TYPE_COLORS={'Fumetto':'#b8894f','Manga':'#3c6e57','Libro':'#4a5f7a','Rivista':'#8f5a56'};
 // Copertina remota con ripiego: se l'immagine non carica prova Open Library (per ISBN), poi mostra il segnaposto colorato
-function coverImg(url,isbn,type,initial){
+function coverImg(url,isbn,type,initial,item){
   const bg=cfg().typeColors[type]||'#3c6e57';
-  return `<img class="cover" src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-isbn="${esc(String(isbn||'').replace(/\D/g,''))}" data-bg="${esc(bg)}" data-ini="${esc(initial)}" onerror="coverFail(this)">`;
+  const d=item||{};
+  const attrs=`data-isbn="${esc(String(isbn||'').replace(/\D/g,''))}" data-bg="${esc(bg)}" data-ini="${esc(initial)}" data-id="${esc(d.id||'')}"`;
+  // copertina nota per essere bloccata (LibraryThing/SBN): non si prova nemmeno a caricarla, si cerca subito un'altra fonte
+  if(badCover(url)) return `<img class="cover" alt="" ${attrs} src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" onload="coverRepair(this)">`;
+  return `<img class="cover" src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" ${attrs} onerror="coverFail(this)">`;
+}
+// Cerca un'altra copertina per un articolo già salvato (ISBN, titolo, autore, anno) e la memorizza; un tentativo ogni 7 giorni
+let coverRepairQueue=Promise.resolve();
+function coverRepair(img){
+  if(img.dataset.rep) return; img.dataset.rep='1';
+  const it=items.find(x=>x.id===img.dataset.id);
+  const toPlaceholder=()=>{ const d=document.createElement('div'); d.className='cover placeholder'; d.style.backgroundColor=img.dataset.bg; d.textContent=img.dataset.ini; if(img.isConnected) img.replaceWith(d); };
+  if(!it || (it.coverTryAt && Date.now()-it.coverTryAt<7*864e5)){ toPlaceholder(); return; }
+  coverRepairQueue=coverRepairQueue.then(async()=>{
+    try{
+      const f=await findCoverByMetadata({isbn:it.isbn,title:(it.series||it.title||''),author:it.author,year:it.year,googleId:''});
+      it.coverTryAt=Date.now();
+      if(f){ it.coverUrl=f.url; const dataUrl=await cacheCover(f.url); if(dataUrl) it.coverUrl=dataUrl; try{ localStorage.setItem('biblio_'+COL(), JSON.stringify(items)); }catch(e){} if(img.isConnected){ img.removeAttribute('onload'); img.src=it.coverUrl; } }
+      else { try{ localStorage.setItem('biblio_'+COL(), JSON.stringify(items)); }catch(e){} toPlaceholder(); }
+    }catch(e){ toPlaceholder(); }
+  });
 }
 async function coverFromPage(){
   const url=document.getElementById('coverPageUrl').value.trim();
@@ -614,8 +634,7 @@ function coverFail(img){
   img.dataset.step=step+1;
   if(step===0){ img.dataset.orig=img.src; if(WORKER_URL && !/\/\?img=/.test(img.src)){ img.src=WORKER_URL.replace(/\/$/,'')+'/?img='+encodeURIComponent(img.src); return; } }   // 1° ripiego: la copertina passa dal worker (aggira i blocchi dei siti di origine)
   if(step<=1 && isbn.length>=10){ img.dataset.step=2; img.src='https://covers.openlibrary.org/b/isbn/'+isbn+'-M.jpg?default=false'; return; }                 // 2° ripiego: Open Library per ISBN
-  const d=document.createElement('div'); d.className='cover placeholder'; d.style.backgroundColor=img.dataset.bg; d.textContent=img.dataset.ini;      // 3°: segnaposto
-  img.replaceWith(d);
+  img.removeAttribute('onerror'); img.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; img.onload=()=>coverRepair(img);      // 3°: ricerca di un'altra copertina; se non c'è, segnaposto
 }
 function previewFail(img){
   if(img.dataset.tried||!WORKER_URL||!img.src||/\/\?img=/.test(img.src)){ img.style.display='none'; return; }
@@ -627,7 +646,7 @@ function renderCard(i){
   el.className='card';
   const initial=(seriesOf(i)||i.title||'?').trim()[0]?.toUpperCase()||'?';
   const coverHtml = i.coverUrl
-    ? coverImg(i.coverUrl,i.isbn,i.type,initial)
+    ? coverImg(i.coverUrl,i.isbn,i.type,initial,i)
     : `<div class="cover placeholder" style="background-color:${cfg().typeColors[i.type]||'#3c6e57'}">${initial}</div>`;
   const statusIcon=cfg().statusIcons[i.status]||cfg().statusIcons[cfg().statusOptions[0]];
   el.style.cursor='pointer';
@@ -699,7 +718,7 @@ function renderSeriesView(filtered,list){
     const card=document.createElement('div');
     card.className='card'; card.style.cursor='pointer';
     const initial=(g.base||'?').trim()[0]?.toUpperCase()||'?';
-    const coverHtml = g.coverUrl? coverImg(g.coverUrl,(g.items.find(x=>x.isbn)||{}).isbn,g.items[0].type,initial) : `<div class="cover placeholder" style="background-color:${cfg().typeColors[g.items[0].type]||'#3c6e57'}">${initial}</div>`;
+    const coverHtml = g.coverUrl? coverImg(g.coverUrl,(g.items.find(x=>x.isbn)||{}).isbn,g.items[0].type,initial,g.items.find(x=>x.isbn)||g.items[0]) : `<div class="cover placeholder" style="background-color:${cfg().typeColors[g.items[0].type]||'#3c6e57'}">${initial}</div>`;
     card.innerHTML=`${coverHtml}<div class="meta"><div class="t">${esc(g.base)}</div><div class="s">${esc(g.author||'')}</div>
       <div style="background:var(--bg);border-radius:6px;overflow:hidden;height:8px;margin-top:6px"><div style="width:${pct}%;background:var(--accent);height:100%"></div></div>
       <span class="tag">📚 ${owned}${total?'/'+total:''} volumi</span></div>`;
@@ -1502,7 +1521,7 @@ function mergeBook(list){
   const first=k=>{ const f=list.find(x=>x[k]); return f? f[k] : ''; };
   const cats=[...new Set([].concat(...list.map(x=>x.categories||[])))];
   return { title:first('title'), author:first('author'), publisher:cleanPublisher(first('publisher')), isbn:first('isbn'),
-    coverUrl:first('coverUrl')||null, googleId:first('googleId'), categories:cats, description:first('description'), dewey:first('dewey'), year:first('year'), language:first('language'),
+    coverUrl:(list.map(x=>x.coverUrl).find(u=>u&&!badCover(u)))||null, googleId:first('googleId'), categories:cats, description:first('description'), dewey:first('dewey'), year:first('year'), language:first('language'),
     source:[...new Set(list.map(x=>x.source).filter(Boolean))].join(' + ') };
 }
 // ---- Wikipedia: categorie e prima frase dell'articolo (it, poi en) per completare genere e tipo ----
@@ -1706,6 +1725,7 @@ async function mdCandidates(q){
   }catch(e){ diag.OpenLibrary='errore'; if(!q.publisher) break; } }
   return {out,diag};
 }
+const badCover=u=>/librarything\.com/i.test(u||'');   // le copertine LibraryThing indicate da SBN sono bloccate fuori dal loro sito
 // Verifica che un'immagine si carichi davvero (e non sia il pixel vuoto che certi siti restituiscono quando manca la copertina)
 function imgOk(url,ms){
   return new Promise(res=>{ const im=new Image(); let done=false; const end=v=>{ if(!done){ done=true; res(v); } };
@@ -1749,6 +1769,7 @@ async function findCoverByMetadata(m){
 async function ensureCover(m){
   try{
     if(!m) return m;
+    if(badCover(m.coverUrl)){ m.coverUrl=''; }
     if(m.coverUrl && !m.coverFromWiki) return m;
     const isb=isbnInfo(m.isbn||'').isbn13;
     if(WORKER_URL && isb && m.publisher && !m.pubTried){
@@ -1769,7 +1790,7 @@ async function lookupByMetadata(q){
   if(!ok.length){ workerNote = (ranked.length? 'nessun risultato abbastanza simile (migliore: "'+ranked[0].c.title+'" '+Math.round(ranked[0].s*100)+'%)' : 'nessun risultato')+' — risultati per fonte → '+dtxt; return null; }
   const pick=k=>{ const f=ok.find(c=>c[k]&&(!Array.isArray(c[k])||c[k].length)); return f? f[k] : ''; };
   const m={ title:ok[0].title, author:((a)=>a.includes(',')?a.split(',').reverse().map(x=>x.trim()).join(' '):a)(ok[0].author||q.author||''), publisher:pick('publisher')||q.publisher||'', year:pick('year')||q.year||'', isbn:pick('isbn'), bid:pick('bid'),
-    language:pick('language'), googleId:pick('googleId'), coverUrl:pick('coverUrl')||null, categories:[].concat(...ok.map(c=>c.categories||[])), description:pick('description'), dewey:'',
+    language:pick('language'), googleId:pick('googleId'), coverUrl:(ok.map(c=>c.coverUrl).find(u=>u&&!badCover(u)))||null, categories:[].concat(...ok.map(c=>c.categories||[])), description:pick('description'), dewey:'',
     source:[...new Set(ok.map(c=>c.source))].join(' + ')+' (per titolo/autore/editore/anno)' };
   if(q.year && q.year<1970) m.isbn='';   // edizione antica: l'ISBN dei candidati è di una ristampa
   const w=await srcWikipedia(m.title.replace(/\s*[:–-]\s*.*$/,'')||m.title, m.author,'');
